@@ -19,8 +19,12 @@
      misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 
-  Ronen Ness
+
+  Made by Ronen Ness
   ronenness@gmail.com
+  
+  Modified by CoMiGo Games
+  admin@nersta.ru
 
 */
 
@@ -500,663 +504,6 @@ SSCD.AABB.prototype = {
 
 };
 
-// FILE: world.js
-
-/*
- * Physical world contains a grid of shapes you can efficiently check collision with
- * Author: Ronen Ness, 2015
- */
- 
-// a collision world. you create an instance of this class and add bodies to it to check collision.
-//
-// params is an optional dictionary with the following optional settings:
-//			grid_size: 		for better performance, the world is divided into a grid of world-chunks and when collision is checked we will
-//								only match objects from the same chunk(s) on grid. this param defines the grid size. default to 512.
-//			grid_error: 	max amount of pixels a shape can move before updating the collision grid. default to 2.
-//								you can increase this number to make moving objects more efficient for the price of sometimes
-//								less accurate collision around the edges. set to 0 if you want to always update grid (useful if all your moving objects move fast)
-SSCD.World = function(params) {
-
-	this.__init_world(params);
-
-};
-
-// collision world prototype
-SSCD.World.prototype = {
-
-	// init the world
-	__init_world: function(params) {
-		// set defaults
-		params = params || {};
-		params.grid_size = params.grid_size || 512;
-		params.grid_error = params.grid_error !== undefined ? params.grid_error : 2;
-
-		// create grid and set params
-		this.__grid = {};
-		this.__params = params;
-
-		// all the shapes currently in this world
-		this.__all_shapes = {};
-
-		// create the empty collision flags dictionary
-		this.__collision_tags = {};
-		this.__next_coll_tag = 0;
-	},
-
-	// define a new collision tag
-	__create_collision_tag: function(name) {
-		// if already exist throw exception
-		if (this.__collision_tags[name]) {
-			throw new SSCD.IllegalActionError("Collision tag named '" + name + "' already exist!");
-		}
-
-		// set collision tag
-		this.__collision_tags[name] = 1 << this.__next_coll_tag++;
-	},
-
-	// all-tags flags
-	_ALL_TAGS_VAL: Number.MAX_SAFE_INTEGER || 4294967295,
-
-	// clean-up world memory
-	cleanup: function() {
-		// iterate over grid rows
-		var rows = Object.keys(this.__grid);
-		for (var _i = 0; _i < rows.length; ++_i) {
-			var i = rows[_i];
-
-			// iterate over grid columns in current row:
-			var columns = Object.keys(this.__grid[i]);
-			for (var _j = 0; _j < columns.length; ++_j) {
-				var j = columns[_j];
-
-				// if empty grid chunk delete it
-				if (this.__grid[i][j].length === 0) {
-					delete this.__grid[i][j];
-				}
-			}
-
-			// if no more columns are left in current row delete the row itself
-			if (Object.keys(this.__grid[i]).length === 0) {
-				delete this.__grid[i];
-			}
-		}
-	},
-
-	// get the hash value of a list of collision tags or individual tag
-	// tags can either be a single string or a list of strings
-	__get_tags_value: function(tags) {
-		// special case: undefined return all possible tags
-		if (tags === undefined) {
-			return this._ALL_TAGS_VAL;
-		}
-
-		// single tag:
-		if (typeof tags === "string") {
-			return this.__collision_tag(tags);
-		}
-
-		// else, assume a list
-		var ret = 0;
-		for (var i = 0; i < tags.length; ++i) {
-			ret |= this.__collision_tag(tags[i]);
-		}
-		return ret;
-	},
-
-	// return the value of a single collision tag, define it if not exist
-	__collision_tag: function(name) {
-		// if tag doesn't exist create it
-		if (this.__collision_tags[name] === undefined) {
-			this.__create_collision_tag(name);
-		}
-
-		// return collision tag
-		return this.__collision_tags[name];
-	},
-
-	// get the grid range that this object touches
-	__get_grid_range: function(obj) {
-		// get bounding box
-		var aabb = obj.get_aabb();
-
-		// calc all grid chunks this shape touches
-		var min_i = Math.floor((aabb.position.x) / this.__params.grid_size);
-		var min_j = Math.floor((aabb.position.y) / this.__params.grid_size);
-		var max_i = Math.floor((aabb.position.x + aabb.size.x) / this.__params.grid_size);
-		var max_j = Math.floor((aabb.position.y + aabb.size.y) / this.__params.grid_size);
-
-		// return grid range
-		return {
-			min_x: min_i,
-			min_y: min_j,
-			max_x: max_i,
-			max_y: max_j
-		};
-	},
-
-	// add collision object to world
-	add: function(obj) {
-		// if object already in world throw exception
-		if (obj.__world) {
-			throw new SSCD.IllegalActionError("Object to add is already in a collision world!");
-		}
-
-		// get grid range
-		var grids = this.__get_grid_range(obj);
-
-		// add shape to all grid parts
-		for (var i = grids.min_x; i <= grids.max_x; ++i) {
-			for (var j = grids.min_y; j <= grids.max_y; ++j) {
-				// make sure lists exist
-				this.__grid[i] = this.__grid[i] || {};
-				this.__grid[i][j] = this.__grid[i][j] || [];
-
-				// get current grid chunk
-				var curr_grid_chunk = this.__grid[i][j];
-
-				// add object to grid chunk
-				curr_grid_chunk.push(obj);
-
-				// add chunk to shape chunks list
-				obj.__grid_chunks.push(curr_grid_chunk);
-			}
-		}
-
-		// set world and grid chunks boundaries
-		obj.__world = this;
-		obj.__grid_bounderies = grids;
-		obj.__last_insert_aabb = obj.get_aabb().clone();
-
-		// add to list of all shapes
-		this.__all_shapes[obj.get_id()] = obj;
-
-		// return the newly added object
-		return obj;
-	},
-
-	// return all shapes in world
-	get_all_shapes: function() {
-		var ret = [];
-		for (var key in this.__all_shapes) {
-			if (this.__all_shapes.hasOwnProperty(key)) {
-				ret.push(this.__all_shapes[key]);
-			}
-		}
-		return ret;
-	},
-
-	// remove object from world
-	remove: function(obj) {
-		// if object is not in this world throw exception
-		if (obj.__world !== this) {
-			throw new SSCD.IllegalActionError("Object to remove is not in this collision world!");
-		}
-
-		// remove from all the grid chunks
-		for (var i = 0; i < obj.__grid_chunks.length; ++i) {
-			// get current grid chunk
-			var grid_chunk = obj.__grid_chunks[i];
-
-			// remove object from grid
-			for (var j = 0; j < grid_chunk.length; ++j) {
-				if (grid_chunk[j] === obj) {
-					grid_chunk.splice(j, 1);
-					break;
-				}
-			}
-		}
-
-		// remove from list of all shapes
-		delete this.__all_shapes[obj.get_id()];
-
-		// clear shape world chunks and world pointer
-		obj.__grid_chunks = [];
-		obj.__world = null;
-		obj.__grid_bounderies = null;
-		obj.__last_insert_aabb = null;
-	},
-
-	// update object grid when it moves or resize etc.
-	// this function is used internally by the collision shapes.
-	__update_shape_grid: function(obj) {
-		var curr_aabb = obj.get_aabb();
-		if (this.__params.grid_error === 0 ||
-			((Math.abs(curr_aabb.position.x - obj.__last_insert_aabb.position.x) > this.__params.grid_error) ||
-				(Math.abs(curr_aabb.position.y - obj.__last_insert_aabb.position.y) > this.__params.grid_error) ||
-				(Math.abs(curr_aabb.size.x - obj.__last_insert_aabb.size.x) > this.__params.grid_error) ||
-				(Math.abs(curr_aabb.size.y - obj.__last_insert_aabb.size.y) > this.__params.grid_error))) {
-			this.remove(obj);
-			this.add(obj);
-		}
-	},
-
-	// check collision and return first object found.
-	// obj: object to check collision with (vector or collision shape)
-	// collision_tags: optional single or multiple tags to check collision with
-	// return: first object collided with, or null if don't collide with anything
-	pick_object: function(obj, collision_tags) {
-		var outlist = [];
-		if (this.test_collision(obj, collision_tags, outlist, 1)) {
-			return outlist[0];
-		}
-		return null;
-	},
-
-	// test collision with vector or object
-	// @param obj: object to check collision with, can be either Vector (for point collision) or any collision shape.
-	// @param collision_tags: optional string or list of strings of tags to match collision with. if undefined will accept all tags
-	// @param out_list: optional output list. if provided, will be filled with all objects collided with. note: collision is more efficient if not provided.
-	// @param ret_objs_count: if provided, will limit returned objects to given count.
-	// @return true if collided with anything, false otherwise.
-	test_collision: function(obj, collision_tags, out_list, ret_objs_count) {
-		// default collision flags
-		collision_tags = this.__get_tags_value(collision_tags);
-
-		// handle vector
-		if (obj instanceof SSCD.Vector) {
-			return this.__test_collision_point(obj, collision_tags, out_list, ret_objs_count);
-		}
-		// handle collision with shape
-		if (obj.is_shape) {
-			return this.__test_collision_shape(obj, collision_tags, out_list, ret_objs_count);
-		}
-	},
-
-
-	// test collision with a field of view.
-	// a field of view is basically a pizza-like shape starting from the center.
-	// @param position: source position (vector).
-	// @param distance: fov distance.
-	// @param direction: look-at direction in degrees (0 = looking right, 90 = looking down, etc.).
-	// @param fov_angle: angle range in degrees.
-	// @param collision_tags: optional string or list of strings of tags to match collision with. if undefined will accept all tags
-	// @param out_list: optional output list. if provided, will be filled with all objects collided with. note: collision is more efficient if not provided.
-	// @return true if collided with anything, false otherwise.
-	test_fov: function(position, distance, direction, fov_angle, collision_tags, out_list) {
-		// default collision flags
-		collision_tags = this.__get_tags_value(collision_tags);
-
-		// default out-list if not provided
-		out_list = out_list || [];
-
-		// create a circle and check basic collision with it
-		var circle = new SSCD.Circle(position, distance);
-		this.__test_collision_shape(circle, collision_tags, out_list);
-
-		// now iterate over collided objects and check angle
-		for (var i = out_list.length - 1; i >= 0; --i) {
-			// get angle between source position and the body
-			var angle = position.angle_from(out_list[i].__position);
-			if (SSCD.Math.angles_dis(direction, angle) > fov_angle) {
-				out_list.splice(i, 1);
-			}
-		}
-
-		// return if got collision
-		return out_list.length > 0;
-	},
-
-	// test collision for given point
-	// see test_collision comment for more info
-	__test_collision_point: function(vector, collision_tags_val, out_list, ret_objs_count) {
-		// get current grid size
-		var grid_size = this.__params.grid_size;
-
-		// get the grid chunk to test collision with
-		var i = Math.floor((vector.x) / grid_size);
-		var j = Math.floor((vector.y) / grid_size);
-
-		// if grid chunk is not in use return empty list
-		if (this.__grid[i] === undefined || this.__grid[i][j] === undefined) {
-			return false;
-		}
-
-		// get current grid chunk
-		var grid_chunk = this.__grid[i][j];
-
-		// iterate over all objects in current grid chunk and add them to render list
-		var found = 0;
-		for (var i = 0; i < grid_chunk.length; ++i) {
-			// get current object to test
-			var curr_obj = grid_chunk[i];
-
-			// if collision tags don't match skip this object
-			if (!curr_obj.collision_tags_match(collision_tags_val)) {
-				continue;
-			}
-
-			// if collide with object:
-			if (this.__do_collision(curr_obj, vector)) {
-				// if got collision list to fill, add object and set return value to true
-				if (out_list) {
-					found++;
-					out_list.push(curr_obj);
-					if (ret_objs_count && found >= ret_objs_count) {
-						return true;
-					}
-				}
-				// if don't have collision list to fill simply return true
-				else {
-					return true;
-				}
-			}
-		}
-
-		// return if collided 
-		// note: get here only if got list to fill or if no collision found
-		return found > 0;
-	},
-
-	// test collision with other shape
-	// see test_collision comment for more info
-	__test_collision_shape: function(obj, collision_tags_val, out_list, ret_objs_count) {
-		var grid;
-
-		// if shape is in this world, use its grid range from cache
-		if (obj.__world === this) {
-			grid = obj.__grid_bounderies;
-		}
-		// if not in world, generate grid range
-		else {
-			grid = this.__get_grid_range(obj);
-		}
-
-		// for return value
-		var found = 0;
-
-		// so we won't test same objects multiple times
-		var already_tests = {};
-
-		// iterate over grid this shape touches
-		for (var i = grid.min_x; i <= grid.max_x; ++i) {
-			// skip empty rows
-			if (this.__grid[i] === undefined) {
-				continue;
-			}
-
-			// iterate on current grid row
-			for (var j = grid.min_y; j <= grid.max_y; ++j) {
-				var curr_grid_chunk = this.__grid[i][j];
-
-				// skip empty grid chunks
-				if (curr_grid_chunk === undefined) {
-					continue;
-				}
-
-				// iterate over objects in grid chunk and check collision
-				for (var x = 0; x < curr_grid_chunk.length; ++x) {
-					// get current object
-					var curr_obj = curr_grid_chunk[x];
-
-					// make sure object is not self
-					if (curr_obj === obj) {
-						continue;
-					}
-
-					// check if this object was already tested
-					if (already_tests[curr_obj.get_id()]) {
-						continue;
-					}
-					already_tests[curr_obj.get_id()] = true;
-
-					// if collision tags don't match skip this object
-					if (!curr_obj.collision_tags_match(collision_tags_val)) {
-						continue;
-					}
-
-					// if collide with object:
-					if (this.__do_collision(curr_obj, obj)) {
-						// if got collision list to fill, add object and set return value to true
-						if (out_list) {
-							found++;
-							out_list.push(curr_obj);
-							if (ret_objs_count && found >= ret_objs_count) {
-								return true;
-							}
-						}
-						// if don't have collision list to fill simply return true
-						else {
-							return true;
-						}
-					}
-				}
-
-			}
-		}
-
-		// return if collided 
-		// note: get here only if got list to fill or if no collision found
-		return found > 0;
-	},
-
-	// do actual collision check between source and target
-	__do_collision: function(src, target) {
-		return src.test_collide_with(target);
-	},
-
-	// debug-render all the objects in world
-	// canvas: a 2d canvas object to render on.
-	// camera_pos: optional, vector that represent the current camera position is 2d space.
-	// show_grid: default to true, if set will render background grid that shows which grid chunks are currently active
-	// show_aabb: default to true, if set will render objects axis-aligned bounding boxes
-	// NOTE: this function will NOT clear canvas before rendering, if you render within a main loop its your responsibility.
-	render: function(canvas, camera_pos, show_grid, show_aabb) {
-		// set default camera pos if doesn't exist
-		camera_pos = camera_pos || SSCD.Vector.ZERO;
-
-		// set default show_grid and show_aabb
-		if (show_grid === undefined) {
-			show_grid = true;
-		}
-		if (show_aabb === undefined) {
-			show_aabb = true;
-		}
-
-		// get ctx and reset previous transformations
-		var ctx = canvas.getContext('2d');
-		ctx.setTransform(1, 0, 0, 1, 0, 0);
-
-		// get current grid size
-		var grid_size = this.__params.grid_size;
-
-		// get grid parts that are visible based on canvas size and camera position
-		var min_i = Math.floor((camera_pos.x) / grid_size);
-		var min_j = Math.floor((camera_pos.y) / grid_size);
-		var max_i = min_i + Math.ceil(canvas.width / grid_size);
-		var max_j = min_j + Math.ceil(canvas.height / grid_size);
-
-		// a list of objects to render
-		var render_list = [];
-
-		// iterate over grid
-		for (var i = min_i; i <= max_i; ++i) {
-
-			// go over grid row
-			for (var j = min_j; j <= max_j; ++j) {
-				// get current grid chunk
-				var curr_grid_chunk = undefined;
-				if (this.__grid[i]) {
-					curr_grid_chunk = this.__grid[i][j];
-				}
-
-				// render current grid chunk
-				if (show_grid) {
-					var position = new SSCD.Vector(i * grid_size, j * grid_size).sub_self(camera_pos);
-					ctx.beginPath();
-					ctx.rect(position.x, position.y, grid_size - 1, grid_size - 1);
-					ctx.lineWidth = "1";
-					if ((curr_grid_chunk === undefined) || (curr_grid_chunk.length === 0)) {
-						ctx.strokeStyle = 'rgba(100, 100, 100, 0.255)';
-					} else {
-						ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
-					}
-					ctx.stroke();
-				}
-
-				// if current grid chunk has no objects skip
-				if (curr_grid_chunk === undefined) {
-					continue;
-				}
-
-				// iterate over all objects in current grid chunk and add them to render list
-				for (var x = 0; x < curr_grid_chunk.length; ++x) {
-					var curr_obj = curr_grid_chunk[x];
-					if (render_list.indexOf(curr_obj) === -1) {
-						render_list.push(curr_grid_chunk[x]);
-					}
-				}
-			}
-		}
-
-		// now render all objects in render list
-		for (var i = 0; i < render_list.length; ++i) {
-			render_list[i].render(ctx, camera_pos);
-			if (show_aabb) {
-				render_list[i].render_aabb(ctx, camera_pos);
-			}
-		}
-	},
-};
-
-
-// for illegal action exception
-SSCD.IllegalActionError = function(message) {
-	this.name = "Illegal Action";
-	this.message = (message || "");
-};
-SSCD.IllegalActionError.prototype = Error.prototype;
-
-// FILE: tilemap.js
-
-/*
- * Tilemap is a special type of collision world, optimized specifically for a 2d tilemap.
- * Author: Ronen Ness, 2015
- */
- 
-// a collision world. you create an instance of this class and add bodies to it to check collision.
-// @param tile_size: size, in pixels, of a single tile
-// @param additional_params: extra params. see SSCD.World for more info.
-SSCD.TilemapWorld = function(tile_size, additional_params) {
-
-	// set defaults
-	var params = additional_params;
-	params = params || {};
-	params.grid_size = tile_size;
-	this.__tiles = {};
-	this.__init_world(params);
-};
-
-// tilemap collision world
-SSCD.TilemapWorld.prototype = {
-
-	// set if a tile blocks or not.
-	// @param index - the x and y index of the tile to set (vector).
-	// @param collision - true if to put a collision shape on this tile, false otherwise.
-	// @param tags - optional tags to apply on tile, if collision is set to true (note: null to reset tags).
-	set_tile: function(index, collision, tags) {
-		// if already have shape, get it
-		var shape = this.get_tile(index);
-
-		// if requested to remove the collision from this tile, do it
-		if (!collision) {
-			if (shape) {
-				this.__set_tile_shape(index, null);
-				this.remove(shape);
-				delete shape;
-			}
-			return;
-		}
-
-		// if got here it means we need to set collision / update tags for this tile.
-		// first, check if need to create new collision shape.
-		if (shape === undefined) {
-			// calc position and size of the shape
-			var tilesize = this.__params.grid_size;
-			var position = index.multiply_scalar(tilesize);
-			var size = new SSCD.Vector(tilesize, tilesize);
-
-			// create and add the shape
-			shape = this.__add_tile_shape(new SSCD.Rectangle(position, size), index);
-			this.__set_tile_shape(index, shape);
-		}
-
-		// set collision tags
-		if (tags !== undefined) {
-			shape.set_collision_tags(tags);
-		}
-	},
-
-	// add collision tile (for internal usage).
-	// @param obj - object to add to the tile.
-	// @param index - tile index.
-	__add_tile_shape: function(obj, index) {
-
-		// make sure lists exist
-		this.__grid[index.x] = this.__grid[index.x] || {};
-		this.__grid[index.x][index.y] = this.__grid[index.x][index.y] || [];
-
-		// get current grid chunk
-		var curr_grid_chunk = this.__grid[index.x][index.y];
-
-		// add object to grid chunk
-		curr_grid_chunk.push(obj);
-
-		// add chunk to shape chunks list
-		obj.__grid_chunks = [curr_grid_chunk];
-
-		// set world and grid chunks boundaries
-		obj.__world = this;
-		obj.__grid_bounderies = {
-			min_x: index.x,
-			min_y: index.y,
-			max_x: index.x,
-			max_y: index.y
-		};
-		// obj.__last_insert_aabb = obj.get_aabb().clone();
-
-		// add to list of all shapes
-		this.__all_shapes[obj.get_id()] = obj;
-
-		// return the newly added object
-		return obj;
-	},
-
-	// set tilemap from a matrix (array of arrays).
-	// @param matrix is the matrix to set, every 1 will be collision, every 0 will not collide. (note: true and false works too).
-	set_from_matrix: function(matrix) {
-		var index = new SSCD.Vector(0, 0);
-		for (var i = 0; i < matrix.length; ++i) {
-			index.x = 0;
-			for (var j = 0; j < matrix[i].length; ++j) {
-				this.set_tile(index, matrix[i][j]);
-				index.x++;
-			}
-			index.y++;
-		}
-	},
-
-	// get the collision shape of a tile (or undefined if have no collision shape on this tile).
-	// @param index - the x and y index of the tile to get.
-	get_tile: function(index) {
-		return this.__tiles[index.x + "_" + index.y];
-	},
-
-	// set the collision shape of a tile.
-	// @param index - tile index.
-	// @param shape - shape to set.
-	__set_tile_shape: function(index, shape) {
-		if (shape === null) {
-			delete this.__tiles[index.x + "_" + index.y];
-		} else {
-			this.__tiles[index.x + "_" + index.y] = shape;
-		}
-	},
-
-};
-
-// inherit from basic world class.
-SSCD.extend(SSCD.World.prototype, SSCD.TilemapWorld.prototype);
-
 // FILE: shapes/shape.js
 
 /*
@@ -1171,346 +518,180 @@ SSCD.Shape = function() {};
 // base shape prototype
 SSCD.Shape.prototype = {
 
-	// shape type (need to be overrided by children)
-	__type: "shape",
+    // shape type (need to be overrided by children)
+    __type: 'shape',
 
-	// define the collision type of this shape (how collision is tested against it)
-	__collision_type: null,
+    // define the collision type of this shape (how collision is tested against it)
+    __collision_type: null,
 
-	// to detect if this object is a collision shape
-	is_shape: true,
+    // to detect if this object is a collision shape
+    is_shape: true,
 
-	// optional data or object you can attach to shapes
-	__data: null,
+    // optional data or object you can attach to shapes
+    __data: null,
 
-	// to give unique id to every shape for internal usage
-	__next_id: 0,
+    // to give unique id to every shape for internal usage
+    __next_id: 0,
 
-	// default type flags: everything
-	__collision_tags: [],
-	__collision_tags_val: SSCD.World.prototype._ALL_TAGS_VAL,
+    // init the general shape
+    __init__() {
+        // create position and set default type
+        this.__position = new SSCD.Vector();
+    },
 
-	// init the general shape
-	__init__: function() {
-		// create position and set default type
-		this.__position = new SSCD.Vector();
+    // check collision with other object
+    // @param obj - any other shape or vector.
+    test_collide_with(obj) {
+        return SSCD.CollisionManager.test_collision(this, obj);
+    },
 
-		// for collision-world internal usage
-		this.__grid_chunks = []; // list with world chunks this shape is in
-		this.__world = null; // the parent collision world
-		this.__grid_bounderies = null; // grid bounderies
-		this.__last_insert_aabb = null; // will store the aabb at the last time this shape grid was last updated
+    // repeal an object from this object.
+    // this means, in simple words, we push the other object outside to prevent penetration.
+    // this works in a very simply way - it iterates and push the penetrating object outside from center until its no longer collided.
+    // @param obj: object or vector to repeal (must have move() function).
+    // @param force: force factor, the bigger this is the stronger / faster the repealing will be. default to 1.
+    // @param iterations: max iterations of repeal-and-test-again routines. default to 1.
+    // @param factor_self: factor to multiply force that will apply on this shape. default to 0.
+    // @param factor_other: factor to multiply force that will apply on this shape. default to 1.
+    // NOTE: this function assume there's collision on start, meaning first iteration of repeal will ALWAYS happen.
+    // @return: total movement due to repeling (vector).
+    repel(obj, force, iterations, factor_self, factor_other) {
+        // set defaults
+        force = force || 1;
+        iterations = iterations || 1;
+        if (factor_self === void 0) {factor_self = 0;}
+        if (factor_other === void 0) {factor_other = 1;}
 
-		// set unique ids
-		this.__id = SSCD.Shape.prototype.__next_id++;
-	},
+        // get push vectors
+        var push_vector_other, push_vector_self;
+        var push_vector = this.get_repel_direction(obj).multiply_scalar_self(force);
+        if (factor_other) { push_vector_other = push_vector.multiply_scalar(factor_other);}
+        if (factor_self) { push_vector_self = push_vector.multiply_scalar(factor_self * -1);}
 
-	// return the shape unique id
-	get_id: function() {
-		return this.__id;
-	},
+        // for return value
+        var ret = SSCD.Vector.ZERO.clone();
 
-	// set the collision tags of this shape.
-	// for example, if you want this shape to be tagged as "wall", use:
-	//		shape.set_collision_tags("walls");
-	//
-	// you can also set multiple tags, like this:
-	//		shape.set_collision_tags(["walls", "glass"]);
-	//
-	// note: set tags to null to reset all collision tags
-	//
-	// @param tags - string or list of strings to set as collision tags for this shape.
-	//		
-	set_collision_tags: function(tags) {
-		// can't set tags without world instance
-		if (this.__world === null) {
-			throw new SSCD.IllegalActionError("Can't set tags for a shape that is not inside a collision world!");
-		}
+        // now do the repeling
+        var collide = true;
+        while (collide && iterations > 0) {
+            // decreate iterations count
+            iterations--;
 
-		// special case - if tags is null, reset tags
-		if (tags === null) {
-			this.__collision_tags = [];
-			this.__collision_tags_val = SSCD.World.prototype._ALL_TAGS_VAL;
-		}
-		// else, set tags
-		else {
-			// set the collision tag hash value
-			this.__collision_tags_val = this.__world.__get_tags_value(tags);
+            // do pushing
+            if (push_vector_other) { obj.move(push_vector_other); }
+            if (push_vector_self) { this.move(push_vector_self); }
+            ret.add_self(push_vector);
 
-			// convert tags to array and store them
-			if (!tags instanceof Array) {
-				tags = [tags];
-			}
-			this.__collision_tags = tags;
-		}
+            // check if still colliding
+            collide = this.test_collide_with(obj);
+        }
 
-		// if there's a hook to call when setting tags, call it
-		if (this.__update_tags_hook) {
-			this.__update_tags_hook();
-		}
+        // return total pushed
+        return ret;
+    },
 
-		// return self
-		return this;
-	},
+    // get repel direction between this shape and another shape / vector.
+    get_repel_direction(obj) {
+        // get the center of this object
+        var center = this.get_abs_center();
 
-	// optional hook to call after updating collision tags
-	__update_tags_hook: null,
+        // get center of other object / vector
+        var other_center;
+        if (obj instanceof SSCD.Vector) {
+            other_center = obj;
+        } else {
+            other_center = obj.get_abs_center();
+        }
 
-	// return collision tag(s) (always return a list of strings)
-	get_collision_tags: function(tags) {
-		return this.__collision_tags;
-	},
+        // return repel direction vector
+        return other_center.sub(center).normalize_self();
+    },
 
-	// check if collision tags match given tags list.
-	// @param tags - tags to check. can either be the tags numeric value, a single string, or a list of strings.
-	// note: if provided string or list of strings this shape must be inside a collision world.
-	collision_tags_match: function(tags) {
-		// if need to convert tags to their numeric value
-		if (isNaN(tags)) {
-			// if don't have collision world raise error
-			if (this.__world === null) {
-				throw new SSCD.IllegalActionError("If you provide tags as string(s) the shape must be inside a collision world to convert them!");
-			}
-			tags = this.__world.__get_tags_value(tags);
-		}
+    // attach data/object to this shape.
+    // @param obj - anything you want to attach to this shape.
+    set_data(obj) {
+        this.__data = obj;
+        return this;
+    },
 
-		// check if tags match
-		return (this.__collision_tags_val & tags) !== 0;
-	},
+    // return the attached data / object of this shape.
+    get_data() {
+        return this.__data;
+    },
 
-	// check collision with other object
-	// @param obj - any other shape or vector.
-	test_collide_with: function(obj) {
-		return SSCD.CollisionManager.test_collision(this, obj);
-	},
+    // return shape type.
+    get_name() {
+        return this.__type;
+    },
 
-	// repeal an object from this object.
-	// this means, in simple words, we push the other object outside to prevent penetration.
-	// this works in a very simply way - it iterates and push the penetrating object outside from center until its no longer collided.
-	// @param obj: object or vector to repeal (must have move() function).
-	// @param force: force factor, the bigger this is the stronger / faster the repealing will be. default to 1.
-	// @param iterations: max iterations of repeal-and-test-again routines. default to 1.
-	// @param factor_self: factor to multiply force that will apply on this shape. default to 0.
-	// @param factor_other: factor to multiply force that will apply on this shape. default to 1.
-	// NOTE: this function assume there's collision on start, meaning first iteration of repeal will ALWAYS happen.
-	// @return: total movement due to repeling (vector).
-	repel: function(obj, force, iterations, factor_self, factor_other) {
-		// set defaults
-		force = force || 1;
-		iterations = iterations || 1;
-		if (factor_self === undefined) factor_self = 0;
-		if (factor_other === undefined) factor_other = 1;
+    // set the current position of this shape.
+    // @param vector - new position.
+    set_position(vector) {
+        this.__position.x = vector.x;
+        this.__position.y = vector.y;
+        this.__update_position();
+        return this;
+    },
 
-		// get push vectors
-		var push_vector_other, push_vector_self;
-		var push_vector = this.get_repel_direction(obj).multiply_scalar_self(force);
-		if (factor_other) push_vector_other = push_vector.multiply_scalar(factor_other);
-		if (factor_self) push_vector_self = push_vector.multiply_scalar(factor_self * -1);
+    // get position (return vector).
+    get_position() {
+        return this.__position.clone();
+    },
 
-		// for return value
-		var ret = SSCD.Vector.ZERO.clone();
+    // move the shape from its current position.
+    // @param vector - vector to move the shape.
+    move(vector) {
+        this.set_position(this.__position.add(vector));
+        return this;
+    },
 
-		// now do the repeling
-		var collide = true;
-		while (collide && iterations > 0) {
-			// decreate iterations count
-			iterations--;
+    // should be called whenever position changes.
+    __update_position() {
+        // call position-change hook
+        if (this.__update_position_hook) {
+            this.__update_position_hook();
+        }
 
-			// do pushing
-			if (push_vector_other) obj.move(push_vector_other);
-			if (push_vector_self) this.move(push_vector_self);
-			ret.add_self(push_vector);
+        // remove bounding box cache
+        if (this.__aabb) {
+            this.__update_aabb_pos();
+        }
+    },
 
-			// check if still colliding
-			collide = this.test_collide_with(obj);
-		}
+    // called to update axis-aligned-bounding-box position.
+    // this function called AFTER the position update, meaning new position applied.
+    // this function only called if have aabb in cache.
+    __update_aabb_pos() {
+        this.__aabb.position = this.__position;
+    },
 
-		// return total pushed
-		return ret;
-	},
+    // return the absolute center of the shape.
+    get_abs_center() {
+        var aabb = this.get_aabb();
+        return aabb.position.add(aabb.size.multiply_scalar(0.5));
+    },
 
-	// get repel direction between this shape and another shape / vector.
-	get_repel_direction: function(obj) {
-		// get the center of this object
-		var center = this.get_abs_center();
+    // reset bounding box.
+    reset_aabb() {
+        this.__aabb = void 0;
+    },
 
-		// get center of other object / vector
-		var other_center;
-		if (obj instanceof SSCD.Vector) {
-			other_center = obj;
-		} else {
-			other_center = obj.get_abs_center();
-		}
+    // optional hook you can override that will be called whenever shape position changes.
+    __update_position_hook: null,
 
-		// return repel direction vector
-		return other_center.sub(center).normalize_self();
-	},
+    // build the shape's axis-aligned bounding box.
+    build_aabb() {
+        throw new SSCD.NotImplementedError();
+    },
 
-	// return shape fill color for debug rendering.
-	// @param opacity - if provided, will use this opacity in return color.
-	__get_render_fill_color: function(opacity) {
-		// if have override fill color use it:
-		if (this.__override_fill_color) {
-			return this.__override_fill_color;
-		}
+    // return the axis-aligned-bounding-box of this shape.
+    get_aabb() {
+        this.__aabb = this.__aabb || this.build_aabb();
+        return this.__aabb;
+    },
 
-		// else, return color based on tag
-		return this.__collision_tags_to_color(this.__collision_tags_val, opacity);
-	},
-
-	// return shape stroke color for debug rendering.
-	// @param opacity - if provided, will use this opacity in return color.
-	__get_render_stroke_color: function(opacity) {
-		// if have override stroke color use it:
-		if (this.__override_stroke_color) {
-			return this.__override_stroke_color;
-		}
-
-		// else, return color based on tag
-		return this.__collision_tags_to_color(this.__collision_tags_val, opacity);
-	},
-
-	// set colors to override the debug rendering colors.
-	// note1: values accept any html5 color value (eg "rgba(r,g,b,a)" or "white").
-	// note2: set nulls to use default colors (based on shape tags).
-	// @param fill_color - shape fill color in debug render.
-	// @param stroke_color - shape stroke color in debug render.
-	set_debug_render_colors: function(fill_color, stroke_color) {
-		this.__override_fill_color = fill_color;
-		this.__override_stroke_color = stroke_color;
-	},
-
-	// default override colors is null - don't override debug colors.
-	__override_fill_color: null,
-	__override_stroke_color: null,
-
-	// return color based on collision tags
-	// @param tags - list with collision tags.
-	// @param opacity - output color opacity.
-	__collision_tags_to_color: function(tags, opacity) {
-		var r = Math.round(Math.abs(Math.sin(tags)) * 255);
-		var g = Math.round(Math.abs(Math.cos(tags)) * 255);
-		var b = Math.round(r ^ g);
-		return "rgba(" + r + "," + g + "," + b + "," + opacity + ")";
-	},
-
-	// attach data/object to this shape.
-	// @param obj - anything you want to attach to this shape.
-	set_data: function(obj) {
-		this.__data = obj;
-		return this;
-	},
-
-	// return the attached data / object of this shape.
-	get_data: function() {
-		return this.__data;
-	},
-
-	// return shape type.
-	get_name: function() {
-		return this.__type;
-	},
-
-	// render shape axis-aligned-bounding-box.
-	// @param ctx - 2d context of a canvas.
-	// @param camera_pos - optional camera position to transform the render position.
-	render_aabb: function(ctx, camera_pos) {
-		var box = this.get_aabb();
-
-		// draw the rect
-		ctx.beginPath();
-		ctx.rect(box.position.x - camera_pos.x, box.position.y - camera_pos.y, box.size.x, box.size.y);
-
-		// draw stroke
-		ctx.lineWidth = "1";
-		ctx.strokeStyle = 'rgba(50, 175, 45, 0.5)';
-		ctx.stroke();
-	},
-
-	// set the current position of this shape.
-	// @param vector - new position.
-	set_position: function(vector) {
-		this.__position.x = vector.x;
-		this.__position.y = vector.y;
-		this.__update_position();
-		return this;
-	},
-
-	// get position (return vector).
-	get_position: function() {
-		return this.__position.clone();
-	},
-
-	// move the shape from its current position.
-	// @param vector - vector to move the shape.
-	move: function(vector) {
-		this.set_position(this.__position.add(vector));
-		return this;
-	},
-
-	// should be called whenever position changes.
-	__update_position: function() {
-		// call position-change hook
-		if (this.__update_position_hook) {
-			this.__update_position_hook();
-		}
-
-		// remove bounding box cache
-		if (this.__aabb) {
-			this.__update_aabb_pos();
-		}
-
-		// update in world
-		this.__update_parent_world();
-	},
-
-	// called to update axis-aligned-bounding-box position.
-	// this function called AFTER the position update, meaning new position applied.
-	// this function only called if have aabb in cache.
-	__update_aabb_pos: function() {
-		this.__aabb.position = this.__position;
-	},
-
-	// return the absolute center of the shape.
-	get_abs_center: function() {
-		var aabb = this.get_aabb();
-		return aabb.position.add(aabb.size.multiply_scalar(0.5));
-	},
-
-	// reset bounding box.
-	reset_aabb: function() {
-		this.__aabb = undefined;
-	},
-
-	// update this shape in parent world (call this when shape change position or change and need to notify world).
-	__update_parent_world: function() {
-		if (this.__world) {
-			this.__world.__update_shape_grid(this);
-		}
-	},
-
-	// optional hook you can override that will be called whenever shape position changes.
-	__update_position_hook: null,
-
-	// render (for debug purposes).
-	// @param ctx - 2d context of a canvas.
-	// @param camera_pos - optional camera position to transform the render position.
-	render: function(ctx, camera_pos) {
-		throw new SSCD.NotImplementedError();
-	},
-
-	// build the shape's axis-aligned bounding box.
-	build_aabb: function() {
-		throw new SSCD.NotImplementedError();
-	},
-
-	// return the axis-aligned-bounding-box of this shape.
-	get_aabb: function() {
-		this.__aabb = this.__aabb || this.build_aabb();
-		return this.__aabb;
-	},
-
-};
+};
+
 
 // FILE: shapes/circle.js
 
@@ -1523,70 +704,50 @@ SSCD.Shape.prototype = {
 // @param position - center position (vector)
 // @param radius - circle radius (integer)
 SSCD.Circle = function(position, radius) {
-	// call init chain
-	this.init();
+    // call init chain
+    this.init();
 
-	// set radius and size
-	this.__radius = radius;
-	this.__size = new SSCD.Vector(radius, radius).multiply_scalar_self(2);
+    // set radius and size
+    this.__radius = radius;
+    this.__size = new SSCD.Vector(radius, radius).multiply_scalar_self(2);
 
-	// set starting position
-	this.set_position(position);
+    // set starting position
+    this.set_position(position);
 };
 
 // Circle prototype
 SSCD.Circle.prototype = {
 
-	// set type and collision type
-	__type: "circle",
-	__collision_type: "circle",
+    // set type and collision type
+    __type: 'circle',
+    __collision_type: 'circle',
 
-	// render (for debug purposes)
-	// @param ctx - 2d context of a canvas
-	// @param camera_pos - optional camera position to transform the render position
-	render: function(ctx, camera_pos) {
-		// apply camera on position
-		var position = this.__position.sub(camera_pos);
+    // return circle radius
+    get_radius() {
+        return this.__radius;
+    },
 
-		// draw the circle
-		ctx.beginPath();
-		ctx.arc(position.x, position.y, this.__radius, 0, 2 * Math.PI, false);
+    // called to update axis-aligned-bounding-box position
+    __update_aabb_pos() {
+        this.__aabb.position = this.__position.sub_scalar(this.__radius);
+    },
 
-		// draw stroke
-		ctx.lineWidth = "7";
-		ctx.strokeStyle = this.__get_render_stroke_color(0.75);
-		ctx.stroke();
+    // return axis-aligned-bounding-box
+    build_aabb() {
+        return new SSCD.AABB(this.__position.sub_scalar(this.__radius), this.__size);
+    },
 
-		// draw fill
-		ctx.fillStyle = this.__get_render_fill_color(0.35);
-		ctx.fill();
-	},
-
-	// return circle radius
-	get_radius: function() {
-		return this.__radius;
-	},
-
-	// called to update axis-aligned-bounding-box position
-	__update_aabb_pos: function() {
-		this.__aabb.position = this.__position.sub_scalar(this.__radius);
-	},
-
-	// return axis-aligned-bounding-box
-	build_aabb: function() {
-		return new SSCD.AABB(this.__position.sub_scalar(this.__radius), this.__size);
-	},
-
-	// return the absolute center of the shape
-	get_abs_center: function() {
-		return this.__position.clone();
-	},
+    // return the absolute center of the shape
+    get_abs_center() {
+        return this.__position.clone();
+    },
 
 };
 
 // inherit from basic shape class.
 // this will fill the missing functions from parent, but will not replace functions existing in child.
-SSCD.extend(SSCD.Shape.prototype, SSCD.Circle.prototype);
+SSCD.extend(SSCD.Shape.prototype, SSCD.Circle.prototype);
+
 
 // FILE: shapes/rectangle.js
 
@@ -1599,99 +760,79 @@ SSCD.extend(SSCD.Shape.prototype, SSCD.Circle.prototype);
 // @param position - starting position (vector)
 // @param size - rectangle size (vector)
 SSCD.Rectangle = function(position, size) {
-	// call init chain
-	this.init();
+    // call init chain
+    this.init();
 
-	// set radius and size
-	this.__size = size;
+    // set radius and size
+    this.__size = size;
 
-	// set starting position
-	this.set_position(position);
+    // set starting position
+    this.set_position(position);
 };
 
 // rectangle prototype
 SSCD.Rectangle.prototype = {
 
-	// set type and collision type
-	__type: "rectangle",
-	__collision_type: "rectangle",
+    // set type and collision type
+    __type: 'rectangle',
+    __collision_type: 'rectangle',
 
-	// render (for debug purposes)
-	// @param ctx - 2d context of a canvas
-	// @param camera_pos - optional camera position to transform the render position
-	render: function(ctx, camera_pos) {
-		// apply camera on position
-		var position = this.__position.sub(camera_pos);
+    // return rectangle size
+    get_size() {
+        return this.__size.clone();
+    },
 
-		// draw the rect
-		ctx.beginPath();
-		ctx.rect(position.x, position.y, this.__size.x, this.__size.y);
+    // return axis-aligned-bounding-box
+    build_aabb() {
+        return new SSCD.AABB(this.__position, this.__size);
+    },
 
-		// draw stroke
-		ctx.lineWidth = "7";
-		ctx.strokeStyle = this.__get_render_stroke_color(0.75);
-		ctx.stroke();
+    // return absolute top-left corner
+    get_top_left() {
+        this.__top_left_c = this.__top_left_c || this.__position.clone();
+        return this.__top_left_c;
+    },
 
-		// draw fill
-		ctx.fillStyle = this.__get_render_fill_color(0.35);
-		ctx.fill();
-	},
+    // return absolute bottom-left corner
+    get_bottom_left() {
+        this.__bottom_left_c = this.__bottom_left_c || this.__position.add(new SSCD.Vector(0, this.__size.y));
+        return this.__bottom_left_c;
+    },
 
-	// return rectangle size
-	get_size: function() {
-		return this.__size.clone();
-	},
+    // return absolute top-right corner
+    get_top_right() {
+        this.__top_right_c = this.__top_right_c || this.__position.add(new SSCD.Vector(this.__size.x, 0));
+        return this.__top_right_c;
+    },
 
-	// return axis-aligned-bounding-box
-	build_aabb: function() {
-		return new SSCD.AABB(this.__position, this.__size);
-	},
+    // return absolute bottom-right corner
+    get_bottom_right() {
+        this.__bottom_right_c = this.__bottom_right_c || this.__position.add(new SSCD.Vector(this.__size.x, this.__size.y));
+        return this.__bottom_right_c;
+    },
 
-	// return absolute top-left corner
-	get_top_left: function() {
-		this.__top_left_c = this.__top_left_c || this.__position.clone();
-		return this.__top_left_c;
-	},
+    // return absolute center
+    get_abs_center() {
+        this.__abs_center_c = this.__abs_center_c || this.__position.add(this.__size.divide_scalar(2));
+        return this.__abs_center_c;
+    },
 
-	// return absolute bottom-left corner
-	get_bottom_left: function() {
-		this.__bottom_left_c = this.__bottom_left_c || this.__position.add(new SSCD.Vector(0, this.__size.y));
-		return this.__bottom_left_c;
-	},
-
-	// return absolute top-right corner
-	get_top_right: function() {
-		this.__top_right_c = this.__top_right_c || this.__position.add(new SSCD.Vector(this.__size.x, 0));
-		return this.__top_right_c;
-	},
-
-	// return absolute bottom-right corner
-	get_bottom_right: function() {
-		this.__bottom_right_c = this.__bottom_right_c || this.__position.add(new SSCD.Vector(this.__size.x, this.__size.y));
-		return this.__bottom_right_c;
-	},
-
-	// return absolute center
-	get_abs_center: function() {
-		this.__abs_center_c = this.__abs_center_c || this.__position.add(this.__size.divide_scalar(2));
-		return this.__abs_center_c;
-	},
-
-	// on position change
-	__update_position_hook: function() {
-		// clear corner cache
-		this.__top_left_c = undefined;
-		this.__top_right_c = undefined;
-		this.__bottom_left_c = undefined;
-		this.__bottom_right_c = undefined;
-		this.__abs_center_c = undefined;
-	},
+    // on position change
+    __update_position_hook() {
+        // clear corner cache
+        this.__top_left_c = void 0;
+        this.__top_right_c = void 0;
+        this.__bottom_left_c = void 0;
+        this.__bottom_right_c = void 0;
+        this.__abs_center_c = void 0;
+    },
 
 };
 
 // inherit from basic shape class.
 // this will fill the missing functions from parent, but will not replace functions existing in child.
-SSCD.extend(SSCD.Shape.prototype, SSCD.Rectangle.prototype);
+SSCD.extend(SSCD.Shape.prototype, SSCD.Rectangle.prototype);
+
 
 // FILE: shapes/line.js
 
@@ -1705,74 +846,57 @@ SSCD.extend(SSCD.Shape.prototype, SSCD.Rectangle.prototype);
 // @param dest - destination point from source (vector)
 // output line will be from source to dest, and when you move it you will actually move the source position.
 SSCD.Line = function(source, dest) {
-	// call init chain
-	this.init();
+    // call init chain
+    this.init();
 
-	// set dest position
-	this.__dest = dest;
+    // set dest position
+    this.__dest = dest;
 
-	// set starting position
-	this.set_position(source);
+    // set starting position
+    this.set_position(source);
 };
 
 // Line prototype
 SSCD.Line.prototype = {
 
-	// set type and collision type
-	__type: "line",
-	__collision_type: "line",
+    // set type and collision type
+    __type: 'line',
+    __collision_type: 'line',
 
-	// render (for debug purposes)
-	// @param ctx - 2d context of a canvas
-	// @param camera_pos - optional camera position to transform the render position
-	render: function(ctx, camera_pos) {
+    // return axis-aligned-bounding-box
+    build_aabb() {
+        var pos = new SSCD.Vector(0, 0);
+        pos.x = this.__dest.x > 0 ? this.__position.x : this.__position.x + this.__dest.x;
+        pos.y = this.__dest.y > 0 ? this.__position.y : this.__position.y + this.__dest.y;
+        var size = this.__dest.apply(Math.abs);
+        return new SSCD.AABB(pos, size);
+    },
 
-		// draw the line
-		ctx.beginPath();
-		ctx.moveTo(this.__position.x, this.__position.y);
-		var dest = this.__position.add(this.__dest);
-		ctx.lineTo(dest.x, dest.y);
+    // return absolute first point
+    get_p1() {
+        this.__p1_c = this.__p1_c || this.__position.clone();
+        return this.__p1_c;
+    },
 
-		// draw stroke
-		ctx.lineWidth = "7";
-		ctx.strokeStyle = this.__get_render_stroke_color(0.75);
-		ctx.stroke();
+    // return absolute second point
+    get_p2() {
+        this.__p2_c = this.__p2_c || this.__position.add(this.__dest);
+        return this.__p2_c;
+    },
 
-	},
-
-	// return axis-aligned-bounding-box
-	build_aabb: function() {
-		var pos = new SSCD.Vector(0, 0);
-		pos.x = this.__dest.x > 0 ? this.__position.x : this.__position.x + this.__dest.x;
-		pos.y = this.__dest.y > 0 ? this.__position.y : this.__position.y + this.__dest.y;
-		var size = this.__dest.apply(Math.abs);
-		return new SSCD.AABB(pos, size);
-	},
-
-	// return absolute first point
-	get_p1: function() {
-		this.__p1_c = this.__p1_c || this.__position.clone();
-		return this.__p1_c;
-	},
-
-	// return absolute second point
-	get_p2: function() {
-		this.__p2_c = this.__p2_c || this.__position.add(this.__dest);
-		return this.__p2_c;
-	},
-
-	// on position change
-	__update_position_hook: function() {
-		// clear points cache
-		this.__p1_c = undefined;
-		this.__p2_c = undefined;
-	},
+    // on position change
+    __update_position_hook() {
+        // clear points cache
+        this.__p1_c = void 0;
+        this.__p2_c = void 0;
+    },
 
 };
 
 // inherit from basic shape class.
 // this will fill the missing functions from parent, but will not replace functions existing in child.
-SSCD.extend(SSCD.Shape.prototype, SSCD.Line.prototype);
+SSCD.extend(SSCD.Shape.prototype, SSCD.Line.prototype);
+
 
 // FILE: shapes/lines_strip.js
 
@@ -1786,125 +910,99 @@ SSCD.extend(SSCD.Shape.prototype, SSCD.Line.prototype);
 // @param points - list of vectors that will make the lines.
 // @param closed - if true, will create a line between last and first points. default to false.
 SSCD.LineStrip = function(position, points, closed) {
-	// call init chain
-	this.init();
+    // call init chain
+    this.init();
 
-	// set points
-	this.__points = points;
+    // set points
+    this.__points = points;
 
-	// if not enough points assert
-	if (points.length <= 1) {
-		throw new SSCD.IllegalActionError("Not enough vectors for LineStrip (got to have at least two vectors)");
-	}
+    // if not enough points assert
+    if (points.length <= 1) {
+        throw new SSCD.IllegalActionError('Not enough vectors for LineStrip (got to have at least two vectors)');
+    }
 
-	// close shape
-	if (closed) {
-		this.__points.push(this.__points[0]);
-	}
+    // close shape
+    if (closed) {
+        this.__points.push(this.__points[0]);
+    }
 
-	// set starting position
-	this.set_position(position);
+    // set starting position
+    this.set_position(position);
 };
 
 // line-strip prototype
 SSCD.LineStrip.prototype = {
 
-	// set type and collision type
-	__type: "line-strip",
-	__collision_type: "line-strip",
+    // set type and collision type
+    __type: 'line-strip',
+    __collision_type: 'line-strip',
 
-	// render (for debug purposes)
-	// @param ctx - 2d context of a canvas
-	// @param camera_pos - optional camera position to transform the render position
-	render: function(ctx, camera_pos) {
+    // return line list with absolute positions
+    get_abs_lines() {
+        // if got lines in cache return it
+        if (this.__abs_lines_c) {
+            return this.__abs_lines_c;
+        }
 
-		// draw the lines
-		var to = undefined;
-		ctx.beginPath();
-		for (var i = 0; i < this.__points.length - 1; ++i) {
-			var from = this.__position.add(this.__points[i]);
-			to = this.__position.add(this.__points[i + 1]);
-			ctx.moveTo(from.x, from.y);
-			ctx.lineTo(to.x, to.y);
-		}
+        // create list of lines
+        var points = this.get_abs_points();
+        var ret = [];
+        for (var i = 0; i < points.length - 1; i++) {
+            ret.push([points[i], points[i + 1]]);
+        }
 
-		// add last point
-		ctx.moveTo(to.x, to.y);
-		to = this.__position.add(this.__points[this.__points.length - 1]);
-		ctx.lineTo(to.x, to.y);
+        // add to cache and return
+        this.__abs_lines_c = ret;
+        return ret;
+    },
 
-		// draw stroke
-		ctx.lineWidth = "7";
-		ctx.strokeStyle = this.__get_render_stroke_color(0.75);
-		ctx.stroke();
+    // return points with absolute position
+    get_abs_points() {
+        // if got points in cache return it
+        if (this.__abs_points_c) {
+            return this.__abs_points_c;
+        }
 
-	},
+        // convert points
+        var ret = [];
+        for (var i = 0; i < this.__points.length; i++) {
+            ret.push(this.__points[i].add(this.__position));
+        }
 
-	// return line list with absolute positions
-	get_abs_lines: function() {
-		// if got lines in cache return it
-		if (this.__abs_lines_c) {
-			return this.__abs_lines_c;
-		}
+        // add to cache and return
+        this.__abs_points_c = ret;
+        return ret;
+    },
 
-		// create list of lines
-		var points = this.get_abs_points();
-		var ret = [];
-		for (var i = 0; i < points.length - 1; i++) {
-			ret.push([points[i], points[i + 1]]);
-		}
+    // on position change
+    __update_position_hook() {
+        // clear points and lines cache
+        this.__abs_points_c = void 0;
+        this.__abs_lines_c = void 0;
+    },
 
-		// add to cache and return
-		this.__abs_lines_c = ret;
-		return ret;
-	},
+    // called to update axis-aligned-bounding-box position
+    __update_aabb_pos() {
+        this.__aabb.position.set(this.__aabb_offset_c.add(this.__position));
+    },
 
-	// return points with absolute position
-	get_abs_points: function() {
-		// if got points in cache return it
-		if (this.__abs_points_c) {
-			return this.__abs_points_c;
-		}
-
-		// convert points
-		var ret = [];
-		for (var i = 0; i < this.__points.length; i++) {
-			ret.push(this.__points[i].add(this.__position));
-		}
-
-		// add to cache and return
-		this.__abs_points_c = ret;
-		return ret;
-	},
-
-	// on position change
-	__update_position_hook: function() {
-		// clear points and lines cache
-		this.__abs_points_c = undefined;
-		this.__abs_lines_c = undefined;
-	},
-
-	// called to update axis-aligned-bounding-box position
-	__update_aabb_pos: function() {
-		this.__aabb.position.set(this.__aabb_offset_c.add(this.__position));
-	},
-
-	// return axis-aligned-bounding-box
-	build_aabb: function() {
-		var ret = new SSCD.AABB(SSCD.Vector.ZERO, SSCD.Vector.ZERO);
-		for (var i = 0; i < this.__points.length; ++i) {
-			ret.add_vector(this.__points[i]);
-		}
-		this.__aabb_offset_c = ret.position.clone();
-		ret.position.add_self(this.__position);
-		return ret;
-	},
+    // return axis-aligned-bounding-box
+    build_aabb() {
+        var ret = new SSCD.AABB(SSCD.Vector.ZERO, SSCD.Vector.ZERO);
+        for (var i = 0; i < this.__points.length; ++i) {
+            ret.add_vector(this.__points[i]);
+        }
+        this.__aabb_offset_c = ret.position.clone();
+        ret.position.add_self(this.__position);
+        return ret;
+    },
 
 };
 
 // inherit from basic shape class.
 // this will fill the missing functions from parent, but will not replace functions existing in child.
-SSCD.extend(SSCD.Shape.prototype, SSCD.LineStrip.prototype);
+SSCD.extend(SSCD.Shape.prototype, SSCD.LineStrip.prototype);
+
 
 // FILE: shapes/composite_shape.js
 
@@ -1917,200 +1015,174 @@ SSCD.extend(SSCD.Shape.prototype, SSCD.LineStrip.prototype);
 // @param position - optional starting position (vector)
 // @param objects - optional list of collision objects to start with
 SSCD.CompositeShape = function(position, objects) {
-	// call init chain
-	this.init();
-	this.__init_comp_shape(position, objects);
+    // call init chain
+    this.init();
+    this.__init_comp_shape(position, objects);
 };
 
 // composite shape prototype
 SSCD.CompositeShape.prototype = {
 
-	// set type and collision type
-	__type: "composite-shape",
-	__collision_type: "composite-shape",
+    // set type and collision type
+    __type: 'composite-shape',
+    __collision_type: 'composite-shape',
 
-	// init the composite shape.
-	// @param position - source position.
-	// @param objects - list of starting objects.
-	__init_comp_shape: function(position, objects) {
-		// create empty list of shapes
-		this.__shapes = [];
+    // init the composite shape.
+    // @param position - source position.
+    // @param objects - list of starting objects.
+    __init_comp_shape(position, objects) {
+        // create empty list of shapes
+        this.__shapes = [];
 
-		// default position
-		position = position || SSCD.Vector.ZERO;
-		this.set_position(position);
+        // default position
+        position = position || SSCD.Vector.ZERO;
+        this.set_position(position);
 
-		// add objects if provided
-		if (objects) {
-			for (var i = 0; i < objects.length; ++i) {
-				this.add(objects[i]);
-			}
-		}
-	},
+        // add objects if provided
+        if (objects) {
+            for (var i = 0; i < objects.length; ++i) {
+                this.add(objects[i]);
+            }
+        }
+    },
 
-	// render (for debug purposes).
-	// @param ctx - 2d context of a canvas.
-	// @param camera_pos - optional camera position to transform the render position.
-	render: function(ctx, camera_pos) {
-		// first render all shapes
-		for (var i = 0; i < this.__shapes.length; ++i) {
-			this.__shapes[i].shape.render(ctx, camera_pos);
-		}
-	},
+    // repeal an object from this object.
+    // here we iterate over sub-object and repeal only from the ones we collide with.
+    // read base shape repel() doc for more info.
+    repel(obj, force, iterations, factor_self, factor_other) {
+        // do repel from independant shapes inside this composite shape
+        var ret = SSCD.Vector.ZERO.clone();
+        for (var i = 0; i < this.__shapes.length; ++i) {
+            var shape = this.__shapes[i].shape;
+            if (shape.test_collide_with(obj)) {
+                ret.add_self(shape.repel(obj, force, iterations, 0, factor_other));
+            }
+        }
 
-	// repeal an object from this object.
-	// here we iterate over sub-object and repeal only from the ones we collide with.
-	// read base shape repel() doc for more info.
-	repel: function(obj, force, iterations, factor_self, factor_other) {
-		// do repel from independant shapes inside this composite shape
-		var ret = SSCD.Vector.ZERO.clone();
-		for (var i = 0; i < this.__shapes.length; ++i) {
-			var shape = this.__shapes[i].shape;
-			if (shape.test_collide_with(obj)) {
-				ret.add_self(shape.repel(obj, force, iterations, 0, factor_other));
-			}
-		}
+        // if have factor to move self, apply it
+        if ((factor_self || 0) !== 0) {
+            this.move(ret.multiply_scalar(factor_self * -1));
+        }
 
-		// if have factor to move self, apply it
-		if ((factor_self || 0) !== 0) {
-			this.move(ret.multiply_scalar(factor_self * -1));
-		}
+        // return factor
+        return ret;
+    },
 
-		// return factor
-		return ret;
-	},
+    // get shapes list.
+    get_shapes() {
+        // if already got shapes list in cache return it
+        if (this.__shapes_list_c) {
+            return this.__shapes_list_c;
+        }
 
-	// set colors to override the debug rendering colors.
-	// read base shape set_debug_render_colors() doc for more info.
-	set_debug_render_colors: function(fill_color, stroke_color) {
-		this.__override_fill_color = fill_color;
-		this.__override_stroke_color = stroke_color;
-		for (var i = 0; i < this.__shapes.length; ++i) {
-			this.__shapes[i].shape.set_debug_render_colors(fill_color, stroke_color);
-		}
-	},
+        // create shapes list
+        var ret = [];
+        for (var i = 0; i < this.__shapes.length; ++i) {
+            ret.push(this.__shapes[i].shape);
+        }
 
-	// get shapes list.
-	get_shapes: function() {
-		// if already got shapes list in cache return it
-		if (this.__shapes_list_c) {
-			return this.__shapes_list_c;
-		}
+        // add to cache and return
+        this.__shapes_list_c = ret;
+        return ret;
+    },
 
-		// create shapes list
-		var ret = [];
-		for (var i = 0; i < this.__shapes.length; ++i) {
-			ret.push(this.__shapes[i].shape);
-		}
+    // return axis-aligned-bounding-box.
+    build_aabb() {
+        // if no shapes return zero aabb
+        if (this.__shapes.length === 0) {
+            this.__aabb_pos_offset_c = SSCD.Vector.ZERO;
+            return new SSCD.AABB(SSCD.Vector.ZERO, SSCD.Vector.ZERO);
+        }
 
-		// add to cache and return
-		this.__shapes_list_c = ret;
-		return ret;
-	},
+        // return combined aabb
+        var ret = null;
+        for (var i = 0; i < this.__shapes.length; ++i) {
+            var curr_aabb = this.__shapes[i].shape.get_aabb();
+            if (ret) {
+                ret.expand(curr_aabb);
+            } else {
+                ret = curr_aabb;
+            }
+        }
 
-	// return axis-aligned-bounding-box.
-	build_aabb: function() {
-		// if no shapes return zero aabb
-		if (this.__shapes.length === 0) {
-			this.__aabb_pos_offset_c = SSCD.Vector.ZERO;
-			return new SSCD.AABB(SSCD.Vector.ZERO, SSCD.Vector.ZERO);
-		}
+        // store diff between position and bounding-box position, for faster aabb movement
+        this.__aabb_pos_offset_c = ret.position.sub(this.__position);
 
-		// return combined aabb
-		var ret = null;
-		for (var i = 0; i < this.__shapes.length; ++i) {
-			var curr_aabb = this.__shapes[i].shape.get_aabb();
-			if (ret) {
-				ret.expand(curr_aabb);
-			} else {
-				ret = curr_aabb;
-			}
-		}
+        // return bounding-box
+        return ret;
+    },
 
-		// store diff between position and bounding-box position, for faster aabb movement
-		this.__aabb_pos_offset_c = ret.position.sub(this.__position);
+    // called to update axis-aligned-bounding-box position.
+    __update_aabb_pos() {
+        this.__aabb.position = this.__position.add(this.__aabb_pos_offset_c);
+    },
 
-		// return bounding-box
-		return ret;
-	},
+    // add shape to the composite shape.
+    // @param shape - the shape to add.
+    add(shape) {
+        // store shape offset
+        var offset = shape.__position;
 
-	// called to update axis-aligned-bounding-box position.
-	__update_aabb_pos: function() {
-		this.__aabb.position = this.__position.add(this.__aabb_pos_offset_c);
-	},
+        // reset shapes list cache
+        this.__shapes_list_c = void 0;
 
-	// add shape to the composite shape.
-	// @param shape - the shape to add.
-	add: function(shape) {
-		// make sure shape don't have a collision world
-		if (shape.__world) {
-			throw new SSCD.IllegalActionError("Can't add shape with collision world to a composite shape!");
-		}
+        // add shape to list of shapes and fix position
+        this.__shapes.push({
+            shape: shape,
+            offset: offset.clone()
+        });
+        shape.set_position(this.__position.add(offset));
 
-		// store shape offset
-		var offset = shape.__position;
+        // reset bounding-box
+        this.reset_aabb();
 
-		// reset shapes list cache
-		this.__shapes_list_c = undefined;
+        // set shape tags to be the composite shape tags
+        shape.__collision_tags_val = this.__collision_tags_val;
+        shape.__collision_tags = this.__collision_tags;
 
-		// add shape to list of shapes and fix position
-		this.__shapes.push({
-			shape: shape,
-			offset: offset.clone()
-		});
-		shape.set_position(this.__position.add(offset));
+        // set shape debug colors
+        shape.__override_fill_color = this.__override_fill_color;
+        shape.__override_stroke_color = this.__override_stroke_color;
 
-		// reset bounding-box and notify collision world about the change
-		this.reset_aabb();
-		this.__update_parent_world();
+        // return the newly added shape
+        return shape;
+    },
 
-		// set shape tags to be the composite shape tags
-		shape.__collision_tags_val = this.__collision_tags_val;
-		shape.__collision_tags = this.__collision_tags;
+    // hook to call when update tags - update all child objects with new tags.
+    __update_tags_hook() {
+        // update all shapes about the new tags
+        for (var i = 0; i < this.__shapes; ++i) {
+            var shape = this.__shapes[i].shape;
+            shape.__collision_tags_val = this.__collision_tags_val;
+            shape.__collision_tags = this.__collision_tags;
+        }
+    },
 
-		// set shape debug colors
-		shape.__override_fill_color = this.__override_fill_color;
-		shape.__override_stroke_color = this.__override_stroke_color;
+    // remove a shape.
+    remove(shape) {
+        this.__shapes_list_c = void 0;
+        for (var i = 0; i < this.__shapes.length; ++i) {
+            if (this.__shapes[i].shape === shape) {
+                this.__shapes.splice(i, 1);
+                return;
+            }
+        }
 
-		// return the newly added shape
-		return shape;
-	},
+        throw new SSCD.IllegalActionError("Shape to remove is not in composite shape!");
+    },
 
-	// hook to call when update tags - update all child objects with new tags.
-	__update_tags_hook: function() {
-		// update all shapes about the new tags
-		for (var i = 0; i < this.__shapes; ++i) {
-			var shape = this.__shapes[i].shape;
-			shape.__collision_tags_val = this.__collision_tags_val;
-			shape.__collision_tags = this.__collision_tags;
-		}
-	},
-
-	// remove a shape.
-	remove: function(shape) {
-		this.__shapes_list_c = undefined;
-		for (var i = 0; i < this.__shapes.length; ++i) {
-			if (this.__shapes[i].shape === shape) {
-				this.__shapes.splice(i, 1);
-				this.__update_parent_world();
-				return;
-			}
-		}
-
-		throw new SSCD.IllegalActionError("Shape to remove is not in composite shape!");
-	},
-
-	// on position change - update all shapes.
-	__update_position_hook: function() {
-		for (var i = 0; i < this.__shapes.length; ++i) {
-			this.__shapes[i].shape.set_position(this.__position.add(this.__shapes[i].offset));
-		}
-	}
+    // on position change - update all shapes.
+    __update_position_hook() {
+        for (var i = 0; i < this.__shapes.length; ++i) {
+            this.__shapes[i].shape.set_position(this.__position.add(this.__shapes[i].offset));
+        }
+    }
 };
 
 // inherit from basic shape class.
 // this will fill the missing functions from parent, but will not replace functions existing in child.
-SSCD.extend(SSCD.Shape.prototype, SSCD.CompositeShape.prototype);
+SSCD.extend(SSCD.Shape.prototype, SSCD.CompositeShape.prototype);
+
 
 // FILE: shapes/capsule.js
 
@@ -2128,7 +1200,7 @@ SSCD.Capsule = function(position, size, standing) {
 	this.init();
 
 	// default standing
-	if (standing === undefined) standing = true;
+	if (standing === void 0) standing = true;
 
 	// create objects
 	objects = [];
@@ -2170,405 +1242,406 @@ SSCD.extend(SSCD.CompositeShape.prototype, SSCD.Capsule.prototype);
 
 SSCD.CollisionManager = {
 
-	// test collision between two objects, a and b.
-	// @param a, b - instances to check collision. can be any shape or vector.
-	test_collision: function(a, b) {
-		// vector-vector collision
-		if (a instanceof SSCD.Vector && b instanceof SSCD.Vector) {
-			return this._test_collision_vector_vector(a, b);
-		}
+    // test collision between two objects, a and b.
+    // @param a, b - instances to check collision. can be any shape or vector.
+    test_collision(a, b) {
+        // vector-vector collision
+        if (a instanceof SSCD.Vector && b instanceof SSCD.Vector) {
+            return this._test_collision_vector_vector(a, b);
+        }
 
-		// composite shape collision
-		if (a.__collision_type == "composite-shape") {
-			return this._test_collision_composite_shape(a, b);
-		}
-		if (b.__collision_type == "composite-shape") {
-			return this._test_collision_composite_shape(b, a);
-		}
+        // composite shape collision
+        if (a.__collision_type == 'composite-shape') {
+            return this._test_collision_composite_shape(a, b);
+        }
+        if (b.__collision_type == 'composite-shape') {
+            return this._test_collision_composite_shape(b, a);
+        }
 
-		// circle-vector collision
-		if (a instanceof SSCD.Vector && b.__collision_type == "circle") {
-			return this._test_collision_circle_vector(b, a);
-		}
-		if (a.__collision_type == "circle" && b instanceof SSCD.Vector) {
-			return this._test_collision_circle_vector(a, b);
-		}
+        // circle-vector collision
+        if (a instanceof SSCD.Vector && b.__collision_type == 'circle') {
+            return this._test_collision_circle_vector(b, a);
+        }
+        if (a.__collision_type == 'circle' && b instanceof SSCD.Vector) {
+            return this._test_collision_circle_vector(a, b);
+        }
 
-		// circle-circle collision
-		if (a.__collision_type == "circle" && b.__collision_type == "circle") {
-			return this._test_collision_circle_circle(b, a);
-		}
+        // circle-circle collision
+        if (a.__collision_type == 'circle' && b.__collision_type == 'circle') {
+            return this._test_collision_circle_circle(b, a);
+        }
 
-		// circle-rectangle collision
-		if (a.__collision_type == "circle" && b.__collision_type == "rectangle") {
-			return this._test_collision_circle_rect(a, b);
-		}
-		if (a.__collision_type == "rectangle" && b.__collision_type == "circle") {
-			return this._test_collision_circle_rect(b, a);
-		}
+        // circle-rectangle collision
+        if (a.__collision_type == 'circle' && b.__collision_type == 'rectangle') {
+            return this._test_collision_circle_rect(a, b);
+        }
+        if (a.__collision_type == 'rectangle' && b.__collision_type == 'circle') {
+            return this._test_collision_circle_rect(b, a);
+        }
 
-		// circle-line collision
-		if (a.__collision_type == "circle" && b.__collision_type == "line") {
-			return this._test_collision_circle_line(a, b);
-		}
-		if (a.__collision_type == "line" && b.__collision_type == "circle") {
-			return this._test_collision_circle_line(b, a);
-		}
+        // circle-line collision
+        if (a.__collision_type == 'circle' && b.__collision_type == 'line') {
+            return this._test_collision_circle_line(a, b);
+        }
+        if (a.__collision_type == 'line' && b.__collision_type == 'circle') {
+            return this._test_collision_circle_line(b, a);
+        }
 
-		// linestrip-line collision
-		if (a.__collision_type == "line-strip" && b.__collision_type == "line") {
-			return this._test_collision_linestrip_line(a, b);
-		}
-		if (a.__collision_type == "line" && b.__collision_type == "line-strip") {
-			return this._test_collision_linestrip_line(b, a);
-		}
+        // linestrip-line collision
+        if (a.__collision_type == 'line-strip' && b.__collision_type == 'line') {
+            return this._test_collision_linestrip_line(a, b);
+        }
+        if (a.__collision_type == 'line' && b.__collision_type == 'line-strip') {
+            return this._test_collision_linestrip_line(b, a);
+        }
 
-		// circle-linestrip collision
-		if (a.__collision_type == "circle" && b.__collision_type == "line-strip") {
-			return this._test_collision_circle_linestrip(a, b);
-		}
-		if (a.__collision_type == "line-strip" && b.__collision_type == "circle") {
-			return this._test_collision_circle_linestrip(b, a);
-		}
+        // circle-linestrip collision
+        if (a.__collision_type == 'circle' && b.__collision_type == 'line-strip') {
+            return this._test_collision_circle_linestrip(a, b);
+        }
+        if (a.__collision_type == 'line-strip' && b.__collision_type == 'circle') {
+            return this._test_collision_circle_linestrip(b, a);
+        }
 
-		// rect-vector collision
-		if (a instanceof SSCD.Vector && b.__collision_type == "rectangle") {
-			return this._test_collision_rect_vector(b, a);
-		}
-		if (a.__collision_type == "rectangle" && b instanceof SSCD.Vector) {
-			return this._test_collision_rect_vector(a, b);
-		}
+        // rect-vector collision
+        if (a instanceof SSCD.Vector && b.__collision_type == 'rectangle') {
+            return this._test_collision_rect_vector(b, a);
+        }
+        if (a.__collision_type == 'rectangle' && b instanceof SSCD.Vector) {
+            return this._test_collision_rect_vector(a, b);
+        }
 
-		// rect-rect collision
-		if (a.__collision_type == "rectangle" && b.__collision_type == "rectangle") {
-			return this._test_collision_rect_rect(b, a);
-		}
+        // rect-rect collision
+        if (a.__collision_type == 'rectangle' && b.__collision_type == 'rectangle') {
+            return this._test_collision_rect_rect(b, a);
+        }
 
-		// line-strip with line-strip collision
-		if (a.__collision_type == "line-strip" && b.__collision_type == "line-strip") {
-			return this._test_collision_linestrip_linestrip(a, b);
-		}
+        // line-strip with line-strip collision
+        if (a.__collision_type == 'line-strip' && b.__collision_type == 'line-strip') {
+            return this._test_collision_linestrip_linestrip(a, b);
+        }
 
-		// rect-line collision
-		if (a.__collision_type == "line" && b.__collision_type == "rectangle") {
-			return this._test_collision_rect_line(b, a);
-		}
-		if (a.__collision_type == "rectangle" && b.__collision_type == "line") {
-			return this._test_collision_rect_line(a, b);
-		}
+        // rect-line collision
+        if (a.__collision_type == 'line' && b.__collision_type == 'rectangle') {
+            return this._test_collision_rect_line(b, a);
+        }
+        if (a.__collision_type == 'rectangle' && b.__collision_type == 'line') {
+            return this._test_collision_rect_line(a, b);
+        }
 
-		// rect-linestrip collision
-		if (a.__collision_type == "line-strip" && b.__collision_type == "rectangle") {
-			return this._test_collision_rect_linestrip(b, a);
-		}
-		if (a.__collision_type == "rectangle" && b.__collision_type == "line-strip") {
-			return this._test_collision_rect_linestrip(a, b);
-		}
+        // rect-linestrip collision
+        if (a.__collision_type == 'line-strip' && b.__collision_type == 'rectangle') {
+            return this._test_collision_rect_linestrip(b, a);
+        }
+        if (a.__collision_type == 'rectangle' && b.__collision_type == 'line-strip') {
+            return this._test_collision_rect_linestrip(a, b);
+        }
 
-		// line-line collision
-		if (a.__collision_type == "line" && b.__collision_type == "line") {
-			return this._test_collision_line_line(a, b);
-		}
+        // line-line collision
+        if (a.__collision_type == 'line' && b.__collision_type == 'line') {
+            return this._test_collision_line_line(a, b);
+        }
 
-		// vector-line collision
-		if (a.__collision_type == "line" && b instanceof SSCD.Vector) {
-			return this._test_collision_vector_line(b, a);
-		}
-		if (a instanceof SSCD.Vector && b.__collision_type == "line") {
-			return this._test_collision_vector_line(a, b);
-		}
+        // vector-line collision
+        if (a.__collision_type == 'line' && b instanceof SSCD.Vector) {
+            return this._test_collision_vector_line(b, a);
+        }
+        if (a instanceof SSCD.Vector && b.__collision_type == 'line') {
+            return this._test_collision_vector_line(a, b);
+        }
 
-		// vector-linestrip collision
-		if (a.__collision_type == "line-strip" && b instanceof SSCD.Vector) {
-			return this._test_collision_vector_linestrip(b, a);
-		}
-		if (a instanceof SSCD.Vector && b.__collision_type == "line-strip") {
-			return this._test_collision_vector_linestrip(a, b);
-		}
+        // vector-linestrip collision
+        if (a.__collision_type == 'line-strip' && b instanceof SSCD.Vector) {
+            return this._test_collision_vector_linestrip(b, a);
+        }
+        if (a instanceof SSCD.Vector && b.__collision_type == 'line-strip') {
+            return this._test_collision_vector_linestrip(a, b);
+        }
 
-		// unsupported shapes!
-		throw new SSCD.UnsupportedShapes(a, b);
-	},
+        // unsupported shapes!
+        throw new SSCD.UnsupportedShapes(a, b);
+    },
 
-	// test collision between two vectors
-	_test_collision_vector_vector: function(a, b) {
-		return (a.x === b.x) && (a.y === b.y);
-	},
+    // test collision between two vectors
+    _test_collision_vector_vector(a, b) {
+        return (a.x === b.x) && (a.y === b.y);
+    },
 
-	// test collision between circle and vector
-	_test_collision_circle_vector: function(circle, vector) {
-		return SSCD.Math.distance(circle.__position, vector) <= circle.__radius;
-	},
+    // test collision between circle and vector
+    _test_collision_circle_vector(circle, vector) {
+        return SSCD.Math.distance(circle.__position, vector) <= circle.__radius;
+    },
 
-	// test collision between circle and another circle
-	_test_collision_circle_circle: function(a, b) {
-		return SSCD.Math.distance(a.__position, b.__position) <= a.__radius + b.__radius;
-	},
+    // test collision between circle and another circle
+    _test_collision_circle_circle(a, b) {
+        return SSCD.Math.distance(a.__position, b.__position) <= a.__radius + b.__radius;
+    },
 
-	// test collision between rectangle and vector
-	_test_collision_rect_vector: function(rect, vector) {
-		return (vector.x >= rect.__position.x) && (vector.y >= rect.__position.y) &&
-			(vector.x <= rect.__position.x + rect.__size.x) &&
-			(vector.y <= rect.__position.y + rect.__size.y);
-	},
+    // test collision between rectangle and vector
+    _test_collision_rect_vector(rect, vector) {
+        return (vector.x >= rect.__position.x) && (vector.y >= rect.__position.y) &&
+            (vector.x <= rect.__position.x + rect.__size.x) &&
+            (vector.y <= rect.__position.y + rect.__size.y);
+    },
 
-	// test collision vector with line
-	_test_collision_vector_line: function(v, line) {
-		return SSCD.Math.is_on_line(v, line.get_p1(), line.get_p2());
-	},
+    // test collision vector with line
+    _test_collision_vector_line(v, line) {
+        return SSCD.Math.is_on_line(v, line.get_p1(), line.get_p2());
+    },
 
-	// test collision vector with linestrip
-	_test_collision_vector_linestrip: function(v, linestrip) {
-		var lines = linestrip.get_abs_lines();
-		for (var i = 0; i < lines.length; ++i) {
-			if (SSCD.Math.is_on_line(v, lines[i][0], lines[i][1])) {
-				return true;
-			}
-		}
-		return false;
-	},
+    // test collision vector with linestrip
+    _test_collision_vector_linestrip(v, linestrip) {
+        var lines = linestrip.get_abs_lines();
+        for (var i = 0; i < lines.length; ++i) {
+            if (SSCD.Math.is_on_line(v, lines[i][0], lines[i][1])) {
+                return true;
+            }
+        }
+        return false;
+    },
 
-	// test collision between circle and line
-	_test_collision_circle_line: function(circle, line) {
-		return SSCD.Math.distance_to_line(circle.__position, line.get_p1(), line.get_p2()) <= circle.__radius;
-	},
+    // test collision between circle and line
+    _test_collision_circle_line(circle, line) {
+        return SSCD.Math.distance_to_line(circle.__position, line.get_p1(), line.get_p2()) <= circle.__radius;
+    },
 
-	// test collision between circle and line-strip
-	_test_collision_circle_linestrip: function(circle, linestrip) {
-		var lines = linestrip.get_abs_lines();
-		for (var i = 0; i < lines.length; ++i) {
-			if (SSCD.Math.distance_to_line(circle.__position, lines[i][0], lines[i][1]) <= circle.__radius) {
-				return true;
-			}
-		}
-		return false;
-	},
+    // test collision between circle and line-strip
+    _test_collision_circle_linestrip(circle, linestrip) {
+        var lines = linestrip.get_abs_lines();
+        for (var i = 0; i < lines.length; ++i) {
+            if (SSCD.Math.distance_to_line(circle.__position, lines[i][0], lines[i][1]) <= circle.__radius) {
+                return true;
+            }
+        }
+        return false;
+    },
 
-	// test collision between linestrip and a single line
-	_test_collision_linestrip_line: function(linestrip, line) {
-		var lines = linestrip.get_abs_lines();
-		var p1 = line.get_p1(),
-			p2 = line.get_p2();
-		for (var i = 0; i < lines.length; ++i) {
-			if (SSCD.Math.line_intersects(p1, p2, lines[i][0], lines[i][1])) {
-				return true;
-			}
-		}
-		return false;
-	},
+    // test collision between linestrip and a single line
+    _test_collision_linestrip_line(linestrip, line) {
+        var lines = linestrip.get_abs_lines();
+        var p1 = line.get_p1(),
+            p2 = line.get_p2();
+        for (var i = 0; i < lines.length; ++i) {
+            if (SSCD.Math.line_intersects(p1, p2, lines[i][0], lines[i][1])) {
+                return true;
+            }
+        }
+        return false;
+    },
 
-	// check collision line with line
-	_test_collision_line_line: function(a, b) {
-		return SSCD.Math.line_intersects(a.get_p1(), a.get_p2(),
-			b.get_p1(), b.get_p2());
-	},
+    // check collision line with line
+    _test_collision_line_line(a, b) {
+        return SSCD.Math.line_intersects(a.get_p1(), a.get_p2(),
+            b.get_p1(), b.get_p2());
+    },
 
-	// check collision between rectangle and line
-	_test_collision_rect_line: function(rect, line) {
-		// get the line's two points
-		var p1 = line.get_p1();
-		var p2 = line.get_p2();
+    // check collision between rectangle and line
+    _test_collision_rect_line(rect, line) {
+        // get the line's two points
+        var p1 = line.get_p1();
+        var p2 = line.get_p2();
 
-		// first check if one of the line points is contained inside the rectangle
-		if (SSCD.CollisionManager._test_collision_rect_vector(rect, p1) ||
-			SSCD.CollisionManager._test_collision_rect_vector(rect, p2)) {
-			return true;
-		}
+        // first check if one of the line points is contained inside the rectangle
+        if (SSCD.CollisionManager._test_collision_rect_vector(rect, p1) ||
+            SSCD.CollisionManager._test_collision_rect_vector(rect, p2)) {
+            return true;
+        }
 
-		// now check collision between line and rect lines
+        // now check collision between line and rect lines
 
-		// left side
-		var r1 = rect.get_top_left();
-		var r2 = rect.get_bottom_left();
-		if (SSCD.Math.line_intersects(p1, p2, r1, r2)) {
-			return true;
-		}
+        // left side
+        var r1 = rect.get_top_left();
+        var r2 = rect.get_bottom_left();
+        if (SSCD.Math.line_intersects(p1, p2, r1, r2)) {
+            return true;
+        }
 
-		// right side
-		var r3 = rect.get_top_right();
-		var r4 = rect.get_bottom_right();
-		if (SSCD.Math.line_intersects(p1, p2, r3, r4)) {
-			return true;
-		}
+        // right side
+        var r3 = rect.get_top_right();
+        var r4 = rect.get_bottom_right();
+        if (SSCD.Math.line_intersects(p1, p2, r3, r4)) {
+            return true;
+        }
 
-		// top side
-		if (SSCD.Math.line_intersects(p1, p2, r1, r3)) {
-			return true;
-		}
+        // top side
+        if (SSCD.Math.line_intersects(p1, p2, r1, r3)) {
+            return true;
+        }
 
-		// bottom side
-		if (SSCD.Math.line_intersects(p1, p2, r2, r4)) {
-			return true;
-		}
+        // bottom side
+        if (SSCD.Math.line_intersects(p1, p2, r2, r4)) {
+            return true;
+        }
 
-		// no collision
-		return false;
-	},
+        // no collision
+        return false;
+    },
 
-	// test collision between rectagnle and linesstrip
-	_test_collision_rect_linestrip: function(rect, linesstrip) {
-		// first check all points
-		var points = linesstrip.get_abs_points();
-		for (var i = 0; i < points.length; ++i) {
-			if (this._test_collision_rect_vector(rect, points[i])) {
-				return true;
-			}
-		}
+    // test collision between rectagnle and linesstrip
+    _test_collision_rect_linestrip(rect, linesstrip) {
+        // first check all points
+        var points = linesstrip.get_abs_points();
+        for (var i = 0; i < points.length; ++i) {
+            if (this._test_collision_rect_vector(rect, points[i])) {
+                return true;
+            }
+        }
 
-		// now check intersection with rectangle sides
+        // now check intersection with rectangle sides
 
-		var r1 = rect.get_top_left();
-		var r2 = rect.get_bottom_left();
-		var r3 = rect.get_top_right();
-		var r4 = rect.get_bottom_right();
+        var r1 = rect.get_top_left();
+        var r2 = rect.get_bottom_left();
+        var r3 = rect.get_top_right();
+        var r4 = rect.get_bottom_right();
 
-		var lines = linesstrip.get_abs_lines();
-		for (var i = 0; i < lines.length; ++i) {
-			var p1 = lines[i][0];
-			var p2 = lines[i][1];
+        var lines = linesstrip.get_abs_lines();
+        for (var i = 0; i < lines.length; ++i) {
+            var p1 = lines[i][0];
+            var p2 = lines[i][1];
 
-			// left side
-			if (SSCD.Math.line_intersects(p1, p2, r1, r2)) {
-				return true;
-			}
+            // left side
+            if (SSCD.Math.line_intersects(p1, p2, r1, r2)) {
+                return true;
+            }
 
-			// right side
-			if (SSCD.Math.line_intersects(p1, p2, r3, r4)) {
-				return true;
-			}
+            // right side
+            if (SSCD.Math.line_intersects(p1, p2, r3, r4)) {
+                return true;
+            }
 
-			// top side
-			if (SSCD.Math.line_intersects(p1, p2, r1, r3)) {
-				return true;
-			}
+            // top side
+            if (SSCD.Math.line_intersects(p1, p2, r1, r3)) {
+                return true;
+            }
 
-			// bottom side
-			if (SSCD.Math.line_intersects(p1, p2, r2, r4)) {
-				return true;
-			}
-		}
+            // bottom side
+            if (SSCD.Math.line_intersects(p1, p2, r2, r4)) {
+                return true;
+            }
+        }
 
-		// no collision
-		return false;
-	},
+        // no collision
+        return false;
+    },
 
-	// test collision between two linestrips
-	_test_collision_linestrip_linestrip: function(strip1, strip2) {
-		var lines1 = strip1.get_abs_lines();
-		var lines2 = strip2.get_abs_lines();
-		for (var i = 0; i < lines1.length; ++i) {
-			for (var j = 0; j < lines2.length; ++j) {
-				if (SSCD.Math.line_intersects(lines1[i][0], lines1[i][1],
-						lines2[j][0], lines2[j][1])) {
-					return true;
-				}
-			}
-		}
-		return false;
-	},
+    // test collision between two linestrips
+    _test_collision_linestrip_linestrip(strip1, strip2) {
+        var lines1 = strip1.get_abs_lines();
+        var lines2 = strip2.get_abs_lines();
+        for (var i = 0; i < lines1.length; ++i) {
+            for (var j = 0; j < lines2.length; ++j) {
+                if (SSCD.Math.line_intersects(lines1[i][0], lines1[i][1],
+                        lines2[j][0], lines2[j][1])) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    },
 
-	// test composite shape with any other shape
-	_test_collision_composite_shape: function(composite, other) {
-		// get all shapes in composite shape
-		var comp_shapes = composite.get_shapes();
+    // test composite shape with any other shape
+    _test_collision_composite_shape(composite, other) {
+        // get all shapes in composite shape
+        var comp_shapes = composite.get_shapes();
 
-		// special case: other shape is a composite shape as well
-		if (other.__collision_type == "composite-shape") {
-			var other_shapes = other.get_shapes();
-			for (var i = 0; i < comp_shapes.length; ++i) {
-				for (var j = 0; j < other_shapes.length; ++j) {
-					if (SSCD.CollisionManager.test_collision(comp_shapes[i], other_shapes[j])) {
-						return true;
-					}
-				}
-			}
-		}
-		// normal case - other shape is a normal shape
-		else {
-			for (var i = 0; i < comp_shapes.length; ++i) {
-				if (SSCD.CollisionManager.test_collision(comp_shapes[i], other)) {
-					return true;
-				}
-			}
-		}
+        // special case: other shape is a composite shape as well
+        if (other.__collision_type == 'composite-shape') {
+            var other_shapes = other.get_shapes();
+            for (var i = 0; i < comp_shapes.length; ++i) {
+                for (var j = 0; j < other_shapes.length; ++j) {
+                    if (SSCD.CollisionManager.test_collision(comp_shapes[i], other_shapes[j])) {
+                        return true;
+                    }
+                }
+            }
+        }
+        // normal case - other shape is a normal shape
+        else {
+            for (var i = 0; i < comp_shapes.length; ++i) {
+                if (SSCD.CollisionManager.test_collision(comp_shapes[i], other)) {
+                    return true;
+                }
+            }
+        }
 
-		// no collision found
-		return false;
+        // no collision found
+        return false;
 
-	},
+    },
 
-	// test collision between circle and rectangle
-	_test_collision_circle_rect: function(circle, rect) {
-		// get circle center
-		var circle_pos = circle.__position;
+    // test collision between circle and rectangle
+    _test_collision_circle_rect(circle, rect) {
+        // get circle center
+        var circle_pos = circle.__position;
 
-		// first check if circle center is inside the rectangle - easy case
-		var collide = SSCD.CollisionManager._test_collision_rect_vector(rect, circle_pos);
-		if (collide) {
-			return true;
-		}
+        // first check if circle center is inside the rectangle - easy case
+        var collide = SSCD.CollisionManager._test_collision_rect_vector(rect, circle_pos);
+        if (collide) {
+            return true;
+        }
 
-		// get rectangle center
-		var rect_center = rect.get_abs_center();
+        // get rectangle center
+        var rect_center = rect.get_abs_center();
 
-		// now check other simple case - collision between rect center and circle
-		var collide = SSCD.CollisionManager._test_collision_circle_vector(circle, rect_center);
-		if (collide) {
-			return true;
-		}
+        // now check other simple case - collision between rect center and circle
+        var collide = SSCD.CollisionManager._test_collision_circle_vector(circle, rect_center);
+        if (collide) {
+            return true;
+        }
 
-		// create a list of lines to check (in the rectangle) based on circle position to rect center
-		var lines = [];
-		if (rect_center.x > circle_pos.x) {
-			lines.push([rect.get_top_left(), rect.get_bottom_left()]);
-		} else {
-			lines.push([rect.get_top_right(), rect.get_bottom_right()]);
-		}
-		if (rect_center.y > circle_pos.y) {
-			lines.push([rect.get_top_left(), rect.get_top_right()]);
-		} else {
-			lines.push([rect.get_bottom_left(), rect.get_bottom_right()]);
-		}
+        // create a list of lines to check (in the rectangle) based on circle position to rect center
+        var lines = [];
+        if (rect_center.x > circle_pos.x) {
+            lines.push([rect.get_top_left(), rect.get_bottom_left()]);
+        } else {
+            lines.push([rect.get_top_right(), rect.get_bottom_right()]);
+        }
+        if (rect_center.y > circle_pos.y) {
+            lines.push([rect.get_top_left(), rect.get_top_right()]);
+        } else {
+            lines.push([rect.get_bottom_left(), rect.get_bottom_right()]);
+        }
 
-		// now check intersection between circle and each of the rectangle lines
-		for (var i = 0; i < lines.length; ++i) {
-			var dist_to_line = SSCD.Math.distance_to_line(circle_pos, lines[i][0], lines[i][1]);
-			if (dist_to_line <= circle.__radius) {
-				return true;
-			}
-		}
+        // now check intersection between circle and each of the rectangle lines
+        for (var i = 0; i < lines.length; ++i) {
+            var dist_to_line = SSCD.Math.distance_to_line(circle_pos, lines[i][0], lines[i][1]);
+            if (dist_to_line <= circle.__radius) {
+                return true;
+            }
+        }
 
-		// no collision..
-		return false;
-	},
+        // no collision..
+        return false;
+    },
 
-	// test collision between circle and rectangle
-	_test_collision_rect_rect: function(a, b) {
-		var r1 = {
-			left: a.__position.x,
-			right: a.__position.x + a.__size.x,
-			top: a.__position.y,
-			bottom: a.__position.y + a.__size.y
-		};
-		var r2 = {
-			left: b.__position.x,
-			right: b.__position.x + b.__size.x,
-			top: b.__position.y,
-			bottom: b.__position.y + b.__size.y
-		};
-		return !(r2.left > r1.right ||
-			r2.right < r1.left ||
-			r2.top > r1.bottom ||
-			r2.bottom < r1.top);
-	},
+    // test collision between circle and rectangle
+    _test_collision_rect_rect(a, b) {
+        var r1 = {
+            left: a.__position.x,
+            right: a.__position.x + a.__size.x,
+            top: a.__position.y,
+            bottom: a.__position.y + a.__size.y
+        };
+        var r2 = {
+            left: b.__position.x,
+            right: b.__position.x + b.__size.x,
+            top: b.__position.y,
+            bottom: b.__position.y + b.__size.y
+        };
+        return !(r2.left > r1.right ||
+            r2.right < r1.left ||
+            r2.top > r1.bottom ||
+            r2.bottom < r1.top);
+    },
 };
 
 // exception when trying to check collision on shapes not supported
 SSCD.UnsupportedShapes = function(a, b) {
-	this.name = "Unsupported Shapes";
-	this.message = "Unsupported shapes collision test! '" + a.get_name() + "' <-> '" + b.get_name() + "'.";
+    this.name = 'Unsupported Shapes';
+    this.message = 'Unsupported shapes collision test! \'' + a.get_name() + '\' <-> \'' + b.get_name() + '\'.';
 };
-SSCD.UnsupportedShapes.prototype = Error.prototype;
+SSCD.UnsupportedShapes.prototype = Error.prototype;
+
 
 // FILE: sscd_close.js
 

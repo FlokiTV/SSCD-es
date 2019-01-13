@@ -43,6 +43,5 @@ dest.close()
 
 # minify and write minified version
 dest = open('dist/dev/sscd.dev.min.js', 'w')
-minified = minifiy_js(full_code)
-dest.write(minified)
+dest.write(full_code)
 dest.close()

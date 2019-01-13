@@ -12,7 +12,7 @@ SSCD.Capsule = function(position, size, standing) {
 	this.init();
 
 	// default standing
-	if (standing === undefined) standing = true;
+	if (standing === void 0) standing = true;
 
 	// create objects
 	objects = [];
