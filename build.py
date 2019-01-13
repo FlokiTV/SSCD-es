@@ -21,8 +21,6 @@ for file in [
 		"utils/vector.js",
 		"utils/extend.js",
 		"utils/aabb.js",
-		"world.js",
-		"tilemap.js",
 		"shapes/shape.js",
 		"shapes/circle.js",
 		"shapes/rectangle.js",
