@@ -1,3 +1,9 @@
+# Note that this is a fork and I (Comigo) am not the original author!
+
+**See https://github.com/RonenNess/SSCD.js for the original, feature-rich version**
+
+This exact fork has World and Tileset modules removed.
+
 # SSCD - Super Simple Collision Detection
 This lib provide a simple 2d collision detection for JavaScript games.
 
