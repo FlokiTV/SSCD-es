@@ -17,7 +17,10 @@ SSCD (Super Simple Collision Detection) is distributed with the zlib-license:
      misrepresented as being the original software.
   3. This notice may not be removed or altered from any source distribution.
 
-  Ronen Ness
+  Made by Ronen Ness
   ronenness@gmail.com
+  
+  Modified by CoMiGo Games
+  admin@nersta.ru
 
 */
