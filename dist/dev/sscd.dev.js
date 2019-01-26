@@ -446,61 +446,69 @@ SSCD.NotImplementedError.prototype = Error.prototype;
 // position: top-left corner (vector)
 // size: width and height (vector)
 SSCD.AABB = function(position, size) {
-	this.position = position.clone();
-	this.size = size.clone();
+    this.position = position.clone();
+    this.size = size.clone();
 };
 
 // some aabb methods
 SSCD.AABB.prototype = {
 
-	// expand this bounding-box by other bounding box
-	expand: function(other) {
-		// get new bounds
-		var min_x = Math.min(this.position.x, other.position.x);
-		var min_y = Math.min(this.position.y, other.position.y);
-		var max_x = Math.max(this.position.x + this.size.x, other.position.x + other.size.x);
-		var max_y = Math.max(this.position.y + this.size.y, other.position.y + other.size.y);
+    // expand this bounding-box by other bounding box
+    expand: function(other) {
+        // get new bounds
+        var min_x = Math.min(this.position.x, other.position.x);
+        var min_y = Math.min(this.position.y, other.position.y);
+        var max_x = Math.max(this.position.x + this.size.x, other.position.x + other.size.x);
+        var max_y = Math.max(this.position.y + this.size.y, other.position.y + other.size.y);
 
-		// set them
-		this.position.x = min_x;
-		this.position.y = min_y;
-		this.size.x = max_x - min_x;
-		this.size.y = max_y - min_y;
-	},
+        // set them
+        this.position.x = min_x;
+        this.position.y = min_y;
+        this.size.x = max_x - min_x;
+        this.size.y = max_y - min_y;
+    },
 
-	// expand this bounding-box with vector
-	add_vector: function(vector) {
-		// update position x
-		var push_pos_x = this.position.x - vector.x;
-		if (push_pos_x > 0) {
-			this.position.x -= push_pos_x;
-			this.size.x += push_pos_x;
-		}
+    // expand this bounding-box with vector
+    add_vector: function(vector) {
+        // update position x
+        var push_pos_x = this.position.x - vector.x;
+        if (push_pos_x > 0) {
+            this.position.x -= push_pos_x;
+            this.size.x += push_pos_x;
+        }
 
-		// update position y
-		var push_pos_y = this.position.y - vector.y;
-		if (push_pos_y > 0) {
-			this.position.y -= push_pos_y;
-			this.size.y += push_pos_y;
-		}
+        // update position y
+        var push_pos_y = this.position.y - vector.y;
+        if (push_pos_y > 0) {
+            this.position.y -= push_pos_y;
+            this.size.y += push_pos_y;
+        }
 
-		// update size x
-		var push_size_x = vector.x - (this.position.x + this.size.x);
-		if (push_size_x > 0) {
-			this.size.x += push_size_x;
-		}
+        // update size x
+        var push_size_x = vector.x - (this.position.x + this.size.x);
+        if (push_size_x > 0) {
+            this.size.x += push_size_x;
+        }
 
-		// update size y
-		var push_size_y = vector.y - (this.position.y + this.size.y);
-		if (push_size_y > 0) {
-			this.size.y += push_size_y;
-		}
-	},
+        // update size y
+        var push_size_y = vector.y - (this.position.y + this.size.y);
+        if (push_size_y > 0) {
+            this.size.y += push_size_y;
+        }
+    },
 
-	// clone this aabb
-	clone: function() {
-		return new SSCD.AABB(this.position, this.size);
-	}
+    // clone this aabb
+    clone: function() {
+        return new SSCD.AABB(this.position, this.size);
+    },
+
+    // 
+    intersects: function(aabb) {
+        return !(b.position.x >= a.position.x + a.size.x ||
+            b.position.x + b.size.x <= a.position.x ||
+            b.position.y >= a.position.y + a.size.y ||
+            b.position.y + b.size.y <= a.position.y);
+    }
 
 };
 
@@ -1616,22 +1624,10 @@ SSCD.CollisionManager = {
 
     // test collision between circle and rectangle
     _test_collision_rect_rect(a, b) {
-        var r1 = {
-            left: a.__position.x,
-            right: a.__position.x + a.__size.x,
-            top: a.__position.y,
-            bottom: a.__position.y + a.__size.y
-        };
-        var r2 = {
-            left: b.__position.x,
-            right: b.__position.x + b.__size.x,
-            top: b.__position.y,
-            bottom: b.__position.y + b.__size.y
-        };
-        return !(r2.left >= r1.right ||
-            r2.right <= r1.left ||
-            r2.top >= r1.bottom ||
-            r2.bottom <= r1.top);
+        return !(b.__position.x >= a.__position.x + a.__size.x ||
+            b.__position.x + b.__size.x <= a.__position.x ||
+            b.__position.y >= a.__position.y + a.__size.y ||
+            b.__position.y + b.__size.y <= a.__position.y);
     },
 };
 
