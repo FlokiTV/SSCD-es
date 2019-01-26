@@ -379,22 +379,10 @@ SSCD.CollisionManager = {
 
     // test collision between circle and rectangle
     _test_collision_rect_rect(a, b) {
-        var r1 = {
-            left: a.__position.x,
-            right: a.__position.x + a.__size.x,
-            top: a.__position.y,
-            bottom: a.__position.y + a.__size.y
-        };
-        var r2 = {
-            left: b.__position.x,
-            right: b.__position.x + b.__size.x,
-            top: b.__position.y,
-            bottom: b.__position.y + b.__size.y
-        };
-        return !(r2.left >= r1.right ||
-            r2.right <= r1.left ||
-            r2.top >= r1.bottom ||
-            r2.bottom <= r1.top);
+        return !(b.__position.x >= a.__position.x + a.__size.x ||
+            b.__position.x + b.__size.x <= a.__position.x ||
+            b.__position.y >= a.__position.y + a.__size.y ||
+            b.__position.y + b.__size.y <= a.__position.y);
     },
 };
 
