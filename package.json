@@ -1,0 +1,15 @@
+{
+  "name": "sscd-es",
+  "version": "1.0.0",
+  "description": "**See https://github.com/RonenNess/SSCD.js for the original, feature-rich version**",
+  "main": "index.js",
+  "directories": {
+    "example": "examples"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
