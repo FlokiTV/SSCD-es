@@ -491,8 +491,8 @@ export abstract class Shape {
 
 // Circle shape
 export class Circle extends Shape {
-  protected __type = 'circle';
-  protected __collisionType: CollisionType = 'circle';
+  protected override __type = 'circle';
+  protected override __collisionType: CollisionType = 'circle';
   private __radius: number;
 
   constructor(position: Vector, radius: number) {
@@ -517,7 +517,7 @@ export class Circle extends Shape {
     return new AABB(position, size);
   }
 
-  getRepelDirection(obj: Shape | Vector): Vector {
+  override getRepelDirection(obj: Shape | Vector): Vector {
     const otherPos = obj instanceof Vector ? obj : (obj as Circle).getPosition();
     return this.__position.sub(otherPos).normalizeSelf();
   }
@@ -525,8 +525,8 @@ export class Circle extends Shape {
 
 // Rectangle shape
 export class Rectangle extends Shape {
-  protected __type = 'rectangle';
-  protected __collisionType: CollisionType = 'rectangle';
+  protected override __type = 'rectangle';
+  protected override __collisionType: CollisionType = 'rectangle';
   private __size: Vector;
   private __topLeftC?: Vector;
   private __topRightC?: Vector;
@@ -590,7 +590,7 @@ export class Rectangle extends Shape {
     return this.__absCenterC;
   }
 
-  protected __updatePositionHook(): void {
+  protected override __updatePositionHook(): void {
     this.__topLeftC = undefined;
     this.__topRightC = undefined;
     this.__bottomLeftC = undefined;
@@ -598,7 +598,7 @@ export class Rectangle extends Shape {
     this.__absCenterC = undefined;
   }
 
-  protected getCollisionBasedRepelDirection(obj: Shape): Vector {
+  protected override getCollisionBasedRepelDirection(obj: Shape): Vector {
     // For rectangles, calculate repel direction based on closest edge/corner
     const objCenter = obj instanceof Rectangle ? obj.getAbsCenter() : obj.getPosition();
     const thisCenter = this.getAbsCenter();
@@ -628,8 +628,8 @@ export class Rectangle extends Shape {
 
 // Line shape
 export class Line extends Shape {
-  protected __type = 'line';
-  protected __collisionType: CollisionType = 'line';
+  protected override __type = 'line';
+  protected override __collisionType: CollisionType = 'line';
   private __dest: Vector;
   private __p1C?: Vector;
   private __p2C?: Vector;
@@ -662,7 +662,7 @@ export class Line extends Shape {
     return this.__p2C;
   }
 
-  protected __updatePositionHook(): void {
+  protected override __updatePositionHook(): void {
     this.__p1C = undefined;
     this.__p2C = undefined;
   }
@@ -670,8 +670,8 @@ export class Line extends Shape {
 
 // LineStrip shape
 export class LineStrip extends Shape {
-  protected __type = 'line-strip';
-  protected __collisionType: CollisionType = 'line-strip';
+  protected override __type = 'line-strip';
+  protected override __collisionType: CollisionType = 'line-strip';
   private __points: Vector[];
   private __absLinesC?: [Vector, Vector][];
   private __absPointsC?: Vector[];
@@ -732,12 +732,12 @@ export class LineStrip extends Shape {
     return ret;
   }
 
-  protected __updatePositionHook(): void {
+  protected override __updatePositionHook(): void {
     this.__absPointsC = undefined;
     this.__absLinesC = undefined;
   }
 
-  protected __updateAABBPos(): void {
+  protected override __updateAABBPos(): void {
     if (this.__aabb && this.__aabbOffsetC) {
       this.__aabb.position.set(this.__aabbOffsetC.add(this.__position));
     }
@@ -746,8 +746,8 @@ export class LineStrip extends Shape {
 
 // CompositeShape
 export class CompositeShape extends Shape {
-  protected __type = 'composite-shape';
-  protected __collisionType: CollisionType = 'composite-shape';
+  protected override __type = 'composite-shape';
+  protected override __collisionType: CollisionType = 'composite-shape';
   private __shapes: Array<{ shape: Shape; offset: Vector }> = [];
   private __shapesListC?: Shape[];
   private __aabbPosOffsetC?: Vector;
@@ -765,7 +765,7 @@ export class CompositeShape extends Shape {
     }
   }
 
-  repel(obj: Shape, force: number = 1, iterations: number = 1, factorSelf: number = 0, factorOther: number = 1): Vector {
+  override repel(obj: Shape, force: number = 1, iterations: number = 1, factorSelf: number = 0, factorOther: number = 1): Vector {
     const ret = Vector.ZERO.clone();
     
     for (const shapeData of this.__shapes) {
@@ -847,13 +847,13 @@ export class CompositeShape extends Shape {
     throw new Error("Shape to remove is not in composite shape!");
   }
 
-  protected __updatePositionHook(): void {
+  protected override __updatePositionHook(): void {
     for (const shapeData of this.__shapes) {
       shapeData.shape.setPosition(this.__position.add(shapeData.offset));
     }
   }
 
-  protected __updateAABBPos(): void {
+  protected override __updateAABBPos(): void {
     if (this.__aabb && this.__aabbPosOffsetC) {
       this.__aabb.position = this.__position.add(this.__aabbPosOffsetC);
     }
